@@ -8,4 +8,14 @@ Magically sort email into smart folders. This is copied (but not forked) from @k
 - Compatible with all imap email clients.
 - Works for all common languages.
 
+## Future development
+
+- [x] Make it work (kind of).
+- [ ] Create command line parameters for the usual tasks and tweaks, such as traing, inference, dry-run
+- [ ] Dockerize
+- [ ] Use dev container
+- [ ] Daemonize to be able to run this as a service
+- [ ] Optimize embedding calls to OpenAI
+- [ ] Add Ollama as a potential source of embeddings
+
 Thanks to: [@kenseehart](https://github.com/kenseehart)
