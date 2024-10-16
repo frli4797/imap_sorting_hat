@@ -1,0 +1,8 @@
+numpy
+openai
+scikit-learn
+pyyaml
+IMAPClient
+bs4
+requests
+backoff
