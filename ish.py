@@ -260,11 +260,17 @@ class ISH:
         self.logger.info("Saved classifier.")
 
     def classify_messages(
-        self, source_folders: List[str], inference_mode=False
+        self, source_folders: List[str], interactive=True
     ) -> None:
+        """ Classify and move messages for all source folders
+
+        Args:
+            source_folders (List[str]): list of source folders
+            interactive (bool, optional): Interactive or non-interactive mode. Defaults to interactive.
+        """
         imap_conn: ImapHelper = self.imap_conn
 
-        if inference_mode:
+        if not interactive:
             classifier = joblib.load(self.model_file)
         else:
             classifier = self.classifier
@@ -276,7 +282,7 @@ class ISH:
             uid = []
             self.logger.info("Classifying messages for folder {folder}")
             # Retrieve the UIDs of all messages in the folder
-            if inference_mode:
+            if not interactive:
                 uids = imap_conn.search(folder, [b"UNSEEN"])
             else:
                 uids = imap_conn.search(folder, ["ALL"])
@@ -284,7 +290,7 @@ class ISH:
             embd = self.get_embeddings(folder, uids[:160])
             mesgs = self.get_msgs(folder, uids[:160])
 
-            to_move = {}
+            to_move:dict[str, list] = {}
             for uid, embd in embd.items():
                 dest_folder = classifier.predict([embd.data[0].embedding])[0]
                 proba = classifier.predict_proba([embd.data[0].embedding])[0]
@@ -292,14 +298,21 @@ class ISH:
 
                 (top_probability,) = ranks[0]
                 if top_probability > 0.25:
+                    mess_to_move = {"uid":uid, "probability": top_probability, "from":mesgs[uid]["from"][0], "body": mesgs[uid]["body"][0:100]}
                     print(
-                        f'\n{uid:3} From {mesgs[uid]["from"][0]}: {mesgs[uid]["body"][0:100]}'
+                        f'\n{uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}'
                     )
-                    for p, c in ranks:
+                    
+                    if dest_folder not in to_move:
+                        to_move[dest_folder] = [mess_to_move]
+                    else:
+                        to_move[dest_folder].append(mess_to_move)
+
+                    for p, c in ranks[:3]:
                         print(f"{p:.2f}: {c}")
                     # TODO: Move messages in batch.
                     (moved, skipped) = self.move_message(
-                        skipped, moved, folder, uid, dest_folder, inference_mode
+                        skipped, moved, folder, uid, dest_folder, interactive
                     )
                 else:
                     skipped += 1
@@ -347,7 +360,7 @@ class ISH:
                 self.learn_folders(settings["destination_folders"])
 
             self.classify_messages(
-                settings["source_folders"], inference_mode=(not interactive)
+                settings["source_folders"], interactive=interactive
             )
         except Exception as e:
             base_logger.error("Something went wrong. Unknown error.")
