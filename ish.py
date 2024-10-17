@@ -35,16 +35,18 @@ from settings import Settings
 logging.basicConfig(level=logging.INFO)
 
 base_logger = logging.getLogger("ish")
-base_logger.setLevel(level=logging.DEBUG)
+
+embed_max_chars = 16384
 
 
 class ISH:
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.setLevel(logging.DEBUG)
+        
         self.settings = Settings()
         self.client: OpenAI = None
         self.imap_conn: ImapHelper = ImapHelper(self.settings)
-        self.max_chars = 16384
         self.classifier: RandomForestClassifier = None
 
     @property
@@ -194,7 +196,7 @@ class ISH:
             if len(new_uids) > 0:
                 self.logger.debug("Found %i embeddings not in cache", len(new_uids))
                 msgs = self.get_msgs(folder, new_uids)
-                # messages = list(msg['body'][:self.max_chars] for msg in msgs.values() )
+                # messages = list(msg['body'][:embed_max_chars] for msg in msgs.values() )
                 # e = self.client.embeddings.create(input = messages,
                 #   model=self.settings['openai_model'])
                 # if len(e.data) == len( msgs.keys()):
@@ -204,7 +206,7 @@ class ISH:
                 self.logger.debug("Adding embeddings for %i messages", len(dmesg))
                 # TODO: Batch the embeddings lookup.
                 for uid, msg in msgs.items():
-                    dembd[uid] = self.get_embedding(msg["body"][: self.max_chars])
+                    dembd[uid] = self.get_embedding(msg["body"][: embed_max_chars])
                     fe[f"{dhash[uid]}.embd"] = dembd[uid]
 
         self.logger.info("Total embeddings found/added %i in %s.", len(dembd), folder)
