@@ -1,11 +1,10 @@
+import logging
 import os
 from getpass import getpass
 from os.path import exists, isdir, join
 from typing import List
 
 import yaml
-
-from ish import base_logger
 
 
 class Settings(dict):
@@ -40,7 +39,7 @@ class Settings(dict):
             self.logger.info("Settings saved to %s", self.settings_file)
 
     def __init__(self):
-        self.logger = base_logger.getChild(self.__class__.__name__)
+        self.logger = logging.getLogger(self.__class__.__name__)
 
         self["source_folders"] = []
         self["destination_folders"] = []

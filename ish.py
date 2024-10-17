@@ -43,9 +43,7 @@ class ISH:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.settings = Settings()
         self.client: OpenAI = None
-        self.imap_conn: ImapHelper = ImapHelper()
-        self.hkey = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
-        self.bkey = b"BODY[]"
+        self.imap_conn: ImapHelper = ImapHelper(self.settings)
         self.max_chars = 16384
         self.classifier: RandomForestClassifier = None
 
@@ -85,7 +83,7 @@ class ISH:
         while not self.imap_conn.connect_imap():
             settings.update_login_settings()
 
-        while not self.imap_conn.connect_openai():
+        while not self.connect_openai():
             settings.update_openai_settings()
 
         folders = self.imap_conn.list_folders()
@@ -141,9 +139,9 @@ class ISH:
             # If not in the cache, fetch the message and put in cache.
             if len(new_uids) > 0:
                 self.logger.debug("Found %s messages not in cache", {len(new_uids)})
-                msgs = imap_conn.fetch(new_uids, [self.hkey, self.bkey])
+                msgs = imap_conn.fetch(new_uids)
                 for uid in new_uids:
-                    mesg = self.parse_mesg(msgs[uid])
+                    mesg = imap_conn.parse_mesg(msgs[uid])
                     msg_hash = self.mesg_hash(mesg)
                     fm[f"{folder}:{uid}"] = msg_hash
                     fm[f"{msg_hash}.mesg"] = mesg
@@ -222,7 +220,7 @@ class ISH:
         for folder in folders:
             self.logger.info("Learning folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
-            uids = imap_conn.search(["ALL"])
+            uids = imap_conn.search(folder, ["ALL"])
             embd = self.get_embeddings(folder, uids[:80])
             embed_array.extend(embd.values())
             folder_array.extend([folder] * len(embd))
@@ -259,14 +257,13 @@ class ISH:
         joblib.dump(self.classifier, self.model_file)
         self.logger.info("Saved classifier.")
 
-    def classify_messages(
-        self, source_folders: List[str], interactive=True
-    ) -> None:
-        """ Classify and move messages for all source folders
+    def classify_messages(self, source_folders: List[str], interactive=True) -> None:
+        """Classify and move messages for all source folders
 
         Args:
             source_folders (List[str]): list of source folders
-            interactive (bool, optional): Interactive or non-interactive mode. Defaults to interactive.
+            interactive (bool, optional): 
+                Interactive or non-interactive mode. Defaults to interactive.
         """
         imap_conn: ImapHelper = self.imap_conn
 
@@ -290,7 +287,7 @@ class ISH:
             embd = self.get_embeddings(folder, uids[:160])
             mesgs = self.get_msgs(folder, uids[:160])
 
-            to_move:dict[str, list] = {}
+            to_move: dict[str, list] = {}
             for uid, embd in embd.items():
                 dest_folder = classifier.predict([embd.data[0].embedding])[0]
                 proba = classifier.predict_proba([embd.data[0].embedding])[0]
@@ -298,11 +295,16 @@ class ISH:
 
                 (top_probability,) = ranks[0]
                 if top_probability > 0.25:
-                    mess_to_move = {"uid":uid, "probability": top_probability, "from":mesgs[uid]["from"][0], "body": mesgs[uid]["body"][0:100]}
+                    mess_to_move = {
+                        "uid": uid,
+                        "probability": top_probability,
+                        "from": mesgs[uid]["from"][0],
+                        "body": mesgs[uid]["body"][0:100],
+                    }
                     print(
                         f'\n{uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}'
                     )
-                    
+
                     if dest_folder not in to_move:
                         to_move[dest_folder] = [mess_to_move]
                     else:
@@ -319,7 +321,9 @@ class ISH:
 
         self.logger.info("Finished moved %i and skipped %i", moved, skipped)
 
-    def move_message(self, skipped, moved, folder, uid, dest_folder, interactive) -> tuple[int, int]:
+    def move_message(
+        self, skipped, moved, folder, uid, dest_folder, interactive
+    ) -> tuple[int, int]:
         opt = None
         imap_conn = self.imap_conn
         if not interactive:
@@ -359,18 +363,17 @@ class ISH:
             if interactive:
                 self.learn_folders(settings["destination_folders"])
 
-            self.classify_messages(
-                settings["source_folders"], interactive=interactive
-            )
+            self.classify_messages(settings["source_folders"], interactive=interactive)
         except Exception as e:
             base_logger.error("Something went wrong. Unknown error.")
-            base_logger.error(e)
+            base_logger.debug(e, stack_info=True)
+            raise e
         return 0
 
 
 def main():
     ish = ISH()
-    r = ish.run(interactive=False)
+    r = ish.run(interactive=True)
     sys.exit(r)
 
 

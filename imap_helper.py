@@ -12,6 +12,9 @@ re_newline = re.compile(r"[\r\n]+")
 re_symbol_sequence = re.compile(r"(?<=\s)\W+(?=\s)")
 re_whitespace = re.compile(r"\s+")
 
+hkey = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
+bkey = b"BODY[]"
+
 
 def html2text(html: str) -> str:
     """Convert html to plain-text using beautifulsoup"""
@@ -37,7 +40,8 @@ def mesg_to_text(mesg: email.message.Message) -> str:
 
 
 class ImapHelper:
-    def __init__(self) -> None:
+    def __init__(self, settings) -> None:
+        self.settings = settings
         self.imap_conn = None
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -46,17 +50,20 @@ class ImapHelper:
             return False
 
         try:
-            imap_conn = imapclient.IMAPClient(self.settings["host"], ssl=True)
-            imap_conn.login(self.settings["username"], self.settings["password"])
+            self.imap_conn = imapclient.IMAPClient(self.settings["host"], ssl=True)
+            self.imap_conn.login(self.settings["username"], self.settings["password"])
         except imaplib.IMAP4.error as e:
             self.logger.error(e)
             return False
-        self.logger.debug(imap_conn.capabilities())
-        self.imap_conn = imap_conn
+        self.logger.debug(self.imap_conn.capabilities())
+
         return True
 
     def list_folders(self) -> list[str]:
         return [t[2] for t in self.imap_conn.list_folders()]
+
+    def fetch(self, uids) -> dict:
+        return self.imap_conn.fetch(uids, [hkey, bkey])
 
     def search(self, folder: str, search_args=None) -> list[int]:
         """Searches for messages in imap folder
@@ -69,9 +76,10 @@ class ImapHelper:
             list: list of uids
         """
         if search_args is None:
-            search_args = ["ALL"]
+            search_args = ['ALL']
         self.imap_conn.select_folder(folder)
-        return self.imap_conn.search(search_args)
+        results = self.imap_conn.search(search_args)
+        return results
 
     def move(self, folder: str, uid: int, dest_folder: str, flag_messages=True) -> int:
         """Move a message from one folder to another
@@ -103,8 +111,8 @@ class ImapHelper:
         Returns:
             dict: the message as a string
         """
-        header = mesg[self.hkey].decode("utf-8")
-        raw_body = mesg[self.bkey]
+        header = mesg[hkey].decode("utf-8")
+        raw_body = mesg[bkey]
         payload = email.message_from_bytes(raw_body)
         body_text = mesg_to_text(payload)
         header_lines = re_newline.split(header)
@@ -143,8 +151,8 @@ class ImapHelper:
 
         return mesg_dict
 
-    def __del__(
-        self,
-    ):
-        self.logger.debug("Cleaning up imap connection.")
-        self.imap_conn.logout()
+    # def __del__(
+    #     self,
+    # ):
+    #     self.logger.debug("Cleaning up imap connection.")
+    #     self.imap_conn.logout()
