@@ -58,7 +58,7 @@ class ImapHelper:
     def list_folders(self) -> list[str]:
         return [t[2] for t in self.imap_conn.list_folders()]
 
-    def search(self, folder: str, search_args = None) -> list[int]:
+    def search(self, folder: str, search_args=None) -> list[int]:
         """Searches for messages in imap folder
 
         Args:
@@ -73,8 +73,8 @@ class ImapHelper:
         self.imap_conn.select_folder(folder)
         return self.imap_conn.search(search_args)
 
-    def move(self, folder:str, uid:int, dest_folder:str, flag_messages=True) -> int:
-        """ Move a message from one folder to another
+    def move(self, folder: str, uid: int, dest_folder: str, flag_messages=True) -> int:
+        """Move a message from one folder to another
 
         Args:
             folder (str): source folder
@@ -142,7 +142,9 @@ class ImapHelper:
         }
 
         return mesg_dict
-    
-    def __del__(self,):
+
+    def __del__(
+        self,
+    ):
         self.logger.debug("Cleaning up imap connection.")
         self.imap_conn.logout()

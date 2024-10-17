@@ -3,13 +3,13 @@
 # imap_sorting_hat = "ish"
 Magically sort email into smart folders
 
-- No rule programming. Instead, just move a few emails into a smart folder and **ish** will quickly 
+- No rule programming. Instead, just move a few emails into a smart folder and **ish** will quickly
   learn what the messages have in common.
 - Any folder can be labeled a smart folder.
 - Uses the lates OpenAI language model technology to quickly sort emails into corresponding folders.
 - Compatible with all imap email clients.
 - Works for all common languages.
- 
+
 Status: Early development
 """
 
@@ -37,12 +37,13 @@ logging.basicConfig(level=logging.INFO)
 base_logger = logging.getLogger("ish")
 base_logger.setLevel(level=logging.DEBUG)
 
+
 class ISH:
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.settings = Settings()
         self.client: OpenAI = None
-        self.imap_conn:ImapHelper = ImapHelper()
+        self.imap_conn: ImapHelper = ImapHelper()
         self.hkey = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
         self.bkey = b"BODY[]"
         self.max_chars = 16384
@@ -92,20 +93,20 @@ class ISH:
 
         print("Configuration complete")
 
-
     def connect_noninteractive(self) -> bool:
         """Connect to imap and openai without user interaction"""
         if not self.imap_conn.connect_imap():
             self.logger.error(
                 "Failed to connect to imap server. Configure, or check your settings in %s",
-                    self.settings.settings_file
+                self.settings.settings_file,
             )
             return False
 
         if not self.connect_openai():
             self.logger.error(
                 "Failed to connect to openai. Configure or check your settings in %s",
-                    self.settings.settings_file)
+                self.settings.settings_file,
+            )
             return False
 
         return True
@@ -126,20 +127,20 @@ class ISH:
         d = {}
         new_uids = []
         imap_conn = self.imap_conn
-        self.logger.info("Getting %i messages from %s",len(uids) , folder)
+        self.logger.info("Getting %i messages from %s", len(uids), folder)
         with shelve.open(self.msgs_file, writeback=False) as fm:
+            # Check if the message/folder combination is in the cache.
             for uid in uids:
-                try:
+                if f"{folder}:{uid}" not in fm:
+                    new_uids.append(uid)
+                else:
                     msg_hash = fm[f"{folder}:{uid}"]
                     mesg = fm[f"{msg_hash}.mesg"]
                     d[uid] = mesg
                     continue
-                except KeyError:
-                    new_uids.append(uid)
-
+            # If not in the cache, fetch the message and put in cache.
             if len(new_uids) > 0:
-                self.logger.info("Found %s messages not in cache", {len(new_uids)})
-
+                self.logger.debug("Found %s messages not in cache", {len(new_uids)})
                 msgs = imap_conn.fetch(new_uids, [self.hkey, self.bkey])
                 for uid in new_uids:
                     mesg = self.parse_mesg(msgs[uid])
@@ -147,7 +148,7 @@ class ISH:
                     fm[f"{folder}:{uid}"] = msg_hash
                     fm[f"{msg_hash}.mesg"] = mesg
                     d[uid] = mesg
-                self.logger.info("Found %i messages to cache", len(new_uids))
+                self.logger.debug("Found %i messages to cache", len(new_uids))
         self.logger.info("Total messages found/added %i in %s.", len(d), folder)
         return d
 
@@ -155,21 +156,25 @@ class ISH:
         """Get embeddings using OpenAI API through cache {uid: embedding}"""
         dhash = {}
         dembd = {}
-        self.logger.info("Getting %i embeddings from %s",len(uids) , folder)
-        # with embd and msgs db open at the same time
+        self.logger.info("Getting %i embeddings from %s", len(uids), folder)
+
         with shelve.open(self.msgs_file, writeback=False) as fm:
             new_uids = []  # uids that need a new hash
+            # Check which folder/messages that are not in the cache.
             for uid in uids:
-                try:
+                if f"{folder}:{uid}" in fm:
                     dhash[uid] = fm[f"{folder}:{uid}"]
-                except KeyError:
+                else:
                     new_uids.append(uid)
                     continue
 
-            self.logger.info("Found %i out of %i needing hash", len(new_uids), len(uids))
+            self.logger.debug(
+                "Found %i out of %i needing hash", len(new_uids), len(uids)
+            )
             dmesg = self.get_msgs(folder, new_uids)
 
             self.logger.debug("Adding hashes for %i messages", len(dmesg))
+            # Saving hashes for unseen messages.
             for uid, mesg in dmesg.items():
                 msg_hash = self.mesg_hash(mesg)
                 dhash[uid] = msg_hash
@@ -181,15 +186,15 @@ class ISH:
             self.logger.debug("Finding embedding for %s messages", len(uids))
         with shelve.open(self.embd_file, writeback=False) as fe:
             for uid, msg_hash in dhash.items():  # dhash is {uid: hash}
-                try:
+                if f"{msg_hash}.embd" in fe:
                     embd = fe[f"{msg_hash}.embd"]
                     dembd[uid] = embd
                     continue
-                except KeyError:
+                else:
                     new_uids.append(uid)
 
             if len(new_uids) > 0:
-                self.logger.info("Found %i embeddings not in cache", len(new_uids))
+                self.logger.debug("Found %i embeddings not in cache", len(new_uids))
                 msgs = self.get_msgs(folder, new_uids)
                 # messages = list(msg['body'][:self.max_chars] for msg in msgs.values() )
                 # e = self.client.embeddings.create(input = messages,
@@ -199,6 +204,7 @@ class ISH:
                 # else:
                 #     self.logger.info("NOT equal")
                 self.logger.debug("Adding embeddings for %i messages", len(dmesg))
+                # TODO: Batch the embeddings lookup.
                 for uid, msg in msgs.items():
                     dembd[uid] = self.get_embedding(msg["body"][: self.max_chars])
                     fe[f"{dhash[uid]}.embd"] = dembd[uid]
@@ -223,7 +229,7 @@ class ISH:
 
         t1 = perf_counter()
         self.logger.info(
-            "Fetched %i embeddings in %.2f seconds", len(embed_array), t1-t0
+            "Fetched %i embeddings in %.2f seconds", len(embed_array), t1 - t0
         )
 
         # Train a classifier
@@ -248,7 +254,7 @@ class ISH:
 
         t2 = perf_counter()
 
-        self.logger.info("Trained classifier in %.2f seconds", t2-t1)
+        self.logger.info("Trained classifier in %.2f seconds", t2 - t1)
 
         joblib.dump(self.classifier, self.model_file)
         self.logger.info("Saved classifier.")
@@ -256,7 +262,7 @@ class ISH:
     def classify_messages(
         self, source_folders: List[str], inference_mode=False
     ) -> None:
-        imap_conn:ImapHelper = self.imap_conn
+        imap_conn: ImapHelper = self.imap_conn
 
         if inference_mode:
             classifier = joblib.load(self.model_file)
@@ -271,13 +277,14 @@ class ISH:
             self.logger.info("Classifying messages for folder {folder}")
             # Retrieve the UIDs of all messages in the folder
             if inference_mode:
-                uids = imap_conn.search(folder,[b"UNSEEN"])
+                uids = imap_conn.search(folder, [b"UNSEEN"])
             else:
                 uids = imap_conn.search(folder, ["ALL"])
 
             embd = self.get_embeddings(folder, uids[:160])
             mesgs = self.get_msgs(folder, uids[:160])
 
+            to_move = {}
             for uid, embd in embd.items():
                 dest_folder = classifier.predict([embd.data[0].embedding])[0]
                 proba = classifier.predict_proba([embd.data[0].embedding])[0]
@@ -290,7 +297,8 @@ class ISH:
                     )
                     for p, c in ranks:
                         print(f"{p:.2f}: {c}")
-                    self.move_message(
+                    # TODO: Move messages in batch.
+                    (moved, skipped) = self.move_message(
                         skipped, moved, folder, uid, dest_folder, inference_mode
                     )
                 else:
@@ -298,7 +306,7 @@ class ISH:
 
         self.logger.info("Finished moved %i and skipped %i", moved, skipped)
 
-    def move_message(self, skipped, moved, folder, uid, dest_folder, interactive):
+    def move_message(self, skipped, moved, folder, uid, dest_folder, interactive) -> tuple[int, int]:
         opt = None
         imap_conn = self.imap_conn
         if not interactive:
@@ -317,7 +325,7 @@ class ISH:
                     sys.exit(0)
                 elif opt == "n":
                     skipped += 1
-
+        return moved, skipped
 
     def run(self, interactive: bool) -> int:
         try:
