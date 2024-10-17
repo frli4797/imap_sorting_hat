@@ -42,7 +42,7 @@ class ISH:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.settings = Settings()
         self.client: OpenAI = None
-        self.imap = ImapHelper()
+        self.imap_conn:ImapHelper = ImapHelper()
         self.hkey = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
         self.bkey = b"BODY[]"
         self.max_chars = 16384
@@ -81,13 +81,13 @@ class ISH:
 
         self.settings.update_data_settings()
 
-        while not self.imap.connect_imap():
+        while not self.imap_conn.connect_imap():
             settings.update_login_settings()
 
-        while not self.imap.connect_openai():
+        while not self.imap_conn.connect_openai():
             settings.update_openai_settings()
 
-        folders = self.imap.list_folders()
+        folders = self.imap_conn.list_folders()
         settings.update_folder_settings(folders)
 
         print("Configuration complete")
@@ -95,7 +95,7 @@ class ISH:
 
     def connect_noninteractive(self) -> bool:
         """Connect to imap and openai without user interaction"""
-        if not self.imap.connect_imap():
+        if not self.imap_conn.connect_imap():
             self.logger.error(
                 "Failed to connect to imap server. Configure, or check your settings in %s",
                     self.settings.settings_file
@@ -125,6 +125,7 @@ class ISH:
         """Fetch new messages through cache {uid: 'msg'}"""
         d = {}
         new_uids = []
+        imap_conn = self.imap_conn
         self.logger.info("Getting %i messages from %s",len(uids) , folder)
         with shelve.open(self.msgs_file, writeback=False) as fm:
             for uid in uids:
@@ -139,7 +140,7 @@ class ISH:
             if len(new_uids) > 0:
                 self.logger.info("Found %s messages not in cache", {len(new_uids)})
 
-                msgs = self.imap_conn.fetch(new_uids, [self.hkey, self.bkey])
+                msgs = imap_conn.fetch(new_uids, [self.hkey, self.bkey])
                 for uid in new_uids:
                     mesg = self.parse_mesg(msgs[uid])
                     msg_hash = self.mesg_hash(mesg)
@@ -206,6 +207,7 @@ class ISH:
         return dembd
 
     def learn_folders(self, folders: List[str]) -> RandomForestClassifier:
+        imap_conn = self.imap_conn
         embed_array = []
         folder_array = []
 
@@ -214,7 +216,7 @@ class ISH:
         for folder in folders:
             self.logger.info("Learning folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
-            uids = self.imap.search(["ALL"])
+            uids = imap_conn.search(["ALL"])
             embd = self.get_embeddings(folder, uids[:80])
             embed_array.extend(embd.values())
             folder_array.extend([folder] * len(embd))
@@ -254,7 +256,7 @@ class ISH:
     def classify_messages(
         self, source_folders: List[str], inference_mode=False
     ) -> None:
-        imap_conn = self.imap_conn
+        imap_conn:ImapHelper = self.imap_conn
 
         if inference_mode:
             classifier = joblib.load(self.model_file)
@@ -265,14 +267,13 @@ class ISH:
         moved = 0
 
         for folder in source_folders:
-            imap_conn.select_folder(folder)
             uid = []
             self.logger.info("Classifying messages for folder {folder}")
             # Retrieve the UIDs of all messages in the folder
             if inference_mode:
-                uids = imap_conn.search(criteria=[b"UNSEEN"])
+                uids = imap_conn.search(folder,[b"UNSEEN"])
             else:
-                uids = imap_conn.search(["ALL"])
+                uids = imap_conn.search(folder, ["ALL"])
 
             embd = self.get_embeddings(folder, uids[:160])
             mesgs = self.get_msgs(folder, uids[:160])
@@ -299,15 +300,15 @@ class ISH:
 
     def move_message(self, skipped, moved, folder, uid, dest_folder, interactive):
         opt = None
-
+        imap_conn = self.imap_conn
         if not interactive:
-            self.imap.move(folder, uid, dest_folder)
+            imap_conn.move(folder, uid, dest_folder)
             moved += 1
         else:
             while opt not in ["y", "n", "q"]:
                 opt = input(f"Move message to {dest_folder}? [y]yes, [n]no, [q]quit:")
                 if opt == "y":
-                    self.imap.move(folder, uid, dest_folder)
+                    imap_conn.move(folder, uid, dest_folder)
                     moved += 1
                 elif opt == "q":
                     self.logger.info(
@@ -343,9 +344,6 @@ class ISH:
         except Exception as e:
             base_logger.error("Something went wrong. Unknown error.")
             base_logger.error(e)
-        finally:
-            base_logger.debug("Cleaning up imap connection.")
-            self.imap_conn.logout()
         return 0
 
 

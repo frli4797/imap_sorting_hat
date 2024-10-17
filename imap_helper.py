@@ -142,3 +142,7 @@ class ImapHelper:
         }
 
         return mesg_dict
+    
+    def __del__(self,):
+        self.logger.debug("Cleaning up imap connection.")
+        self.imap_conn.logout()
