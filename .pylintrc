@@ -51,22 +51,6 @@ confidence=
 # --enable=similarities". If you want to run only the classes checker, but have
 # no Warning level messages displayed, use"--disable=all --enable=classes
 # --disable=W"
-#
-# -----------------------------------------------------------------------
-# 2015-01-12 - What follows is the list of all disabled items necessary
-# to get a clean run of lint across CourseBuilder.  These are separated
-# into three tiers:
-#
-# - Fix-worthy.  This includes:
-#   - Probable bugs
-#   - Easily-addressed hygiene issues,
-#   - Real warnings which we may mark as suppressed on a case-by-case basis.
-# - Items that are questionable practice, but not necessarily economical to fix.
-# - Items that we intend to ignore, as we do not consider them bad practice.
-#
-# Warning messages are documented at http://docs.pylint.org/features.html
-#
-# ----------------------------------------------------------------------
 # Fix-worthy:
 #
 # ---- Possible bugs:
