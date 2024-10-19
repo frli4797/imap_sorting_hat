@@ -115,7 +115,7 @@ class ISH:
 
     @staticmethod
     def __backoff_debug(details):
-        base_logger.info("Backing off {wait:0.1f} seconds after {tries} tries ")
+        base_logger.info("Backing off {wait:0.1f} seconds after {tries} tries ".format(**details))
 
     @backoff.on_exception(backoff.expo, RateLimitError, on_backoff=__backoff_debug)
     def __get_embedding(self, text:str) -> list:
@@ -158,7 +158,7 @@ class ISH:
                     continue
             # If not in the cache, fetch the message and put in cache.
             if len(new_uids) > 0:
-                self.logger.debug("Found %s messages not in cache", {len(new_uids)})
+                self.logger.debug("Found %s messages not in cache", len(new_uids))
                 msgs = imap_conn.fetch(new_uids)
                 for uid in new_uids:
                     mesg = imap_conn.parse_mesg(msgs[uid])
@@ -315,7 +315,7 @@ class ISH:
 
         for folder in source_folders:
             uids = []
-            self.logger.info("Classifying messages for folder {folder}")
+            self.logger.info("Classifying messages for folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
             if not interactive:
                 uids = imap_conn.search(folder, [b"UNSEEN"])
