@@ -1,8 +1,9 @@
 {
-    "notebook.defaultFormatter": "ms-python.pylint",
-    "editor.defaultFormatter": "ms-python.pylint",
+    "notebook.defaultFormatter": "ms-python.black-formatter",
+    "editor.defaultFormatter": "ms-python.black-formatter",
     "editor.defaultFoldingRangeProvider": "ms-python.python",
-    "python.analysis.inlayHints.functionReturnTypes": true,
+    "python.analysis.inlayHints.functionReturnTypes": false,
     "python.analysis.inlayHints.variableTypes": true,
-    "python.analysis.inlayHints.pytestParameters": true
+    "python.analysis.inlayHints.pytestParameters": false,
+    "python.analysis.enablePytestSupport": false
 }

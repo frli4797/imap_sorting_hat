@@ -114,10 +114,12 @@ class ISH:
 
     @staticmethod
     def __backoff_debug(details):
-        base_logger.info("Backing off {wait:0.1f} seconds after {tries} tries ".format(**details))
+        base_logger.info(
+            "Backing off {wait:0.1f} seconds after {tries} tries ".format(**details)
+        )
 
     @backoff.on_exception(backoff.expo, RateLimitError, on_backoff=__backoff_debug)
-    def __get_embedding(self, text:str) -> list:
+    def __get_embedding(self, text: str) -> list:
         """Get the embedding from OpenAI
 
         Args:
@@ -170,7 +172,7 @@ class ISH:
         return d
 
     def get_embeddings(self, folder: str, uids: List[int]) -> Dict[int, np.ndarray]:
-        """ Get embeddings using OpenAI API through cache {uid: embedding}
+        """Get embeddings using OpenAI API through cache {uid: embedding}
 
         Args:
             folder (str): the source folder
@@ -231,14 +233,14 @@ class ISH:
                 self.logger.debug("Adding embeddings for %i messages", len(dmesg))
                 # TODO: Batch the embeddings lookup.
                 for uid, msg in msgs.items():
-                    dembd[uid] = self.__get_embedding(msg["body"][: embed_max_chars])
+                    dembd[uid] = self.__get_embedding(msg["body"][:embed_max_chars])
                     fe[f"{dhash[uid]}.embd"] = dembd[uid]
 
         self.logger.info("Total embeddings found/added %i in %s.", len(dembd), folder)
         return dembd
 
     def learn_folders(self, folders: List[str]) -> RandomForestClassifier:
-        """ Learn the (source) folders using cached and fetched embeddings
+        """Learn the (source) folders using cached and fetched embeddings
             Also always saves the model pickle to disk
 
         Args:
@@ -299,7 +301,7 @@ class ISH:
 
         Args:
             source_folders (List[str]): list of source folders
-            interactive (bool, optional): 
+            interactive (bool, optional):
                 Interactive or non-interactive mode. Defaults to interactive.
         """
         imap_conn: ImapHelper = self.__imap_conn
@@ -331,10 +333,10 @@ class ISH:
                 ranks = sorted(zip(proba, classifier.classes_), reverse=True)
                 (top_probability, predcited_class) = ranks[0]
                 mess_to_move = {
-                        "uid": uid,
-                        "probability": top_probability,
-                        "from": mesgs[uid]["from"][0],
-                        "body": mesgs[uid]["body"][0:100],
+                    "uid": uid,
+                    "probability": top_probability,
+                    "from": mesgs[uid]["from"][0],
+                    "body": mesgs[uid]["body"][0:100],
                 }
                 if top_probability > 0.25:
                     print(
@@ -347,7 +349,8 @@ class ISH:
                     if interactive and not self.__select_move(dest_folder):
                         self.logger.debug(
                             f"""Skipping due to probability {top_probability:.2f}%
-                                {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}""")
+                                {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}"""
+                        )
                         self.skipped += 1
                         continue
 
@@ -359,14 +362,15 @@ class ISH:
                 else:
                     self.logger.debug(
                         f"""Skipping due to probability {top_probability:.2f}%
-                            {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}""")
+                            {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}"""
+                    )
                     self.skipped += 1
             self.logger.info("Finished predicting %s", folder)
             self.moved += self.move_messages(folder, to_move)
         self.logger.info("Finished moved %i and skipped %i", self.moved, self.skipped)
 
-    def __select_move(self, dest_folder:str) -> bool:
-        """ Interactively ask user if to move.
+    def __select_move(self, dest_folder: str) -> bool:
+        """Interactively ask user if to move.
 
         Args:
             dest_folder (str): destination folder
@@ -385,9 +389,8 @@ class ISH:
             elif opt == "n":
                 return False
 
-    def move_messages(
-        self, folder:str, messages:dict[str,list]) -> int:
-        """ Move the messages market for moving, by target folder.
+    def move_messages(self, folder: str, messages: dict[str, list]) -> int:
+        """Move the messages market for moving, by target folder.
 
         Args:
             folder (str): source folder
@@ -400,13 +403,12 @@ class ISH:
         moved = 0
         for dest_folder in messages:
             messages_list = messages[dest_folder]
-            uids:list = [mess["uid"] for mess in messages_list]
+            uids: list = [mess["uid"] for mess in messages_list]
 
             imap_conn.move(folder, uids, dest_folder)
             moved += len(uids)
 
         return moved
-
 
     def run(self, interactive: bool) -> int:
         try:
