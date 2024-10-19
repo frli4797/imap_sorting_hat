@@ -44,7 +44,7 @@ class ISH:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.DEBUG)
         
-        self.__settingss = Settings()
+        self.__settings = Settings()
         self.__client: OpenAI = None
         self.__imap_conn: ImapHelper = ImapHelper(self.__settings)
         self.classifier: RandomForestClassifier = None
@@ -118,7 +118,7 @@ class ISH:
         base_logger.info("Backing off {wait:0.1f} seconds after {tries} tries ")
 
     @backoff.on_exception(backoff.expo, RateLimitError, on_backoff=__backoff_debug)
-    def __get_embedding(self, text:str) -> CreateEmbeddingResponse:
+    def __get_embedding(self, text:str) -> list:
         """Get the embedding from OpenAI
 
         Args:
@@ -130,7 +130,7 @@ class ISH:
         e: CreateEmbeddingResponse = self.__client.embeddings.create(
             input=[text], model=self.__settings["openai_model"]
         )
-        return e
+        return e.data[0].embedding
 
     def get_msgs(self, folder: str, uids: List[int]) -> Dict[int, str]:
         """Fetch new messages through cache {uid: 'msg'}
@@ -272,7 +272,7 @@ class ISH:
 
         all_embeddings: List = []
         for embd in embed_array:
-            embedding = embd.data[0].embedding
+            embedding = embd
             all_embeddings.append(embedding)
 
         X = np.array(all_embeddings)
@@ -327,18 +327,17 @@ class ISH:
 
             to_move: dict[str, list] = {}
             for uid, embd in embd.items():
-                dest_folder = classifier.predict([embd.data[0].embedding])[0]
-                proba = classifier.predict_proba([embd.data[0].embedding])[0]
+                dest_folder = classifier.predict([embd])[0]
+                proba = classifier.predict_proba([embd])[0]
                 ranks = sorted(zip(proba, classifier.classes_), reverse=True)
-
                 (top_probability, predcited_class) = ranks[0]
-                if top_probability > 0.25:
-                    mess_to_move = {
+                mess_to_move = {
                         "uid": uid,
                         "probability": top_probability,
                         "from": mesgs[uid]["from"][0],
                         "body": mesgs[uid]["body"][0:100],
-                    }
+                }
+                if top_probability > 0.25:
                     print(
                         f'\n{uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}'
                     )
@@ -405,7 +404,7 @@ class ISH:
             imap_conn.move(folder, uids, dest_folder)
             moved += len(uids)
 
-        return len(uids)
+        return moved
 
 
     def run(self, interactive: bool) -> int:
