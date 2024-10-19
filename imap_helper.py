@@ -16,21 +16,21 @@ hkey = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
 bkey = b"BODY[]"
 
 
-def html2text(html: str) -> str:
+def __html2text(html: str) -> str:
     """Convert html to plain-text using beautifulsoup"""
     soup = bs4.BeautifulSoup(html, "html.parser")
     text = soup.get_text(separator=" ")
     return text
 
 
-def mesg_to_text(mesg: email.message.Message) -> str:
+def __mesg_to_text(mesg: email.message.Message) -> str:
     """Convert an email message to plain-text"""
     text = ""
     for part in mesg.walk():
         if part.get_content_type() == "text/plain":
             text += part.get_payload(decode=True).decode("utf-8", errors="ignore")
         elif part.get_content_type() == "text/html":
-            text += html2text(
+            text += __html2text(
                 part.get_payload(decode=True).decode("utf-8", errors="ignore")
             )
 
@@ -41,29 +41,29 @@ def mesg_to_text(mesg: email.message.Message) -> str:
 
 class ImapHelper:
     def __init__(self, settings) -> None:
-        self.settings = settings
-        self.imap_conn = None
+        self.__settings = settings
+        self.__imap_conn = None
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def connect_imap(self) -> bool:
-        if not self.settings["host"] or not self.settings["username"]:
+        if not self.__settings["host"] or not self.__settings["username"]:
             return False
 
         try:
-            self.imap_conn = imapclient.IMAPClient(self.settings["host"], ssl=True)
-            self.imap_conn.login(self.settings["username"], self.settings["password"])
+            self.__imap_conn = imapclient.IMAPClient(self.__settings["host"], ssl=True)
+            self.__imap_conn.login(self.__settings["username"], self.__settings["password"])
         except imaplib.IMAP4.error as e:
             self.logger.error(e)
             return False
-        self.logger.debug(self.imap_conn.capabilities())
+        self.logger.debug(self.__imap_conn.capabilities())
 
         return True
 
     def list_folders(self) -> list[str]:
-        return [t[2] for t in self.imap_conn.list_folders()]
+        return [t[2] for t in self.__imap_conn.list_folders()]
 
     def fetch(self, uids) -> dict:
-        return self.imap_conn.fetch(uids, [hkey, bkey])
+        return self.__imap_conn.fetch(uids, [hkey, bkey])
 
     def search(self, folder: str, search_args=None) -> list[int]:
         """Searches for messages in imap folder
@@ -77,30 +77,34 @@ class ImapHelper:
         """
         if search_args is None:
             search_args = ['ALL']
-        self.imap_conn.select_folder(folder)
-        results = self.imap_conn.search(search_args)
+        self.__imap_conn.select_folder(folder)
+        results = self.__imap_conn.search(search_args)
         return results
 
-    def move(self, folder: str, uid: int, dest_folder: str, flag_messages=True) -> int:
+    def move(self, folder: str, uids: list, dest_folder: str, flag_messages=True) -> int:
         """Move a message from one folder to another
 
         Args:
             folder (str): source folder
-            uid (int): message uid
+            uids (list): message uids
             dest_folder (str): destination folder
             flag_messages (bool, optional): Whether to flag messages moved. Defaults to True.
         Returns:
             int: number of messages moved
         """
-        self.imap_conn.select_folder(folder)
+        if type(uids) is not list and len(uids) > 0:
+            self.logger.error("Expected the uids to be a non empty list")
+            raise ValueError("Expected uids to be a non empty list")
+
+        self.__imap_conn.select_folder(folder)
         if flag_messages:
-            self.imap_conn.add_flags([uid], [imapclient.FLAGGED])
+            self.__imap_conn.add_flags(uids, [imapclient.FLAGGED])
             # imap_conn.remove_flags([uid], [imapclient.SEEN])
-        self.imap_conn.copy([uid], dest_folder)
-        self.imap_conn.add_flags([uid], imapclient.DELETED, silent=True)
-        self.imap_conn.uid_expunge([uid])
-        self.logger.info("REALLY moved from %s to %s: %i", folder, dest_folder, uid)
-        return 1
+        self.__imap_conn.copy(uids, dest_folder)
+        self.__imap_conn.add_flags(uids, imapclient.DELETED, silent=True)
+        self.__imap_conn.uid_expunge(uids)
+        self.logger.info("REALLY moved from %s to %s: %i", folder, dest_folder, len(uids))
+        return len(uids)
 
     def parse_mesg(self, mesg: dict) -> dict:
         """Parse a raw message into a string
@@ -114,7 +118,7 @@ class ImapHelper:
         header = mesg[hkey].decode("utf-8")
         raw_body = mesg[bkey]
         payload = email.message_from_bytes(raw_body)
-        body_text = mesg_to_text(payload)
+        body_text = __mesg_to_text(payload)
         header_lines = re_newline.split(header)
 
         header_dict = {}
@@ -151,8 +155,3 @@ class ImapHelper:
 
         return mesg_dict
 
-    # def __del__(
-    #     self,
-    # ):
-    #     self.logger.debug("Cleaning up imap connection.")
-    #     self.imap_conn.logout()

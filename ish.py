@@ -44,33 +44,35 @@ class ISH:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.DEBUG)
         
-        self.settings = Settings()
-        self.client: OpenAI = None
-        self.imap_conn: ImapHelper = ImapHelper(self.settings)
+        self.__settingss = Settings()
+        self.__client: OpenAI = None
+        self.__imap_conn: ImapHelper = ImapHelper(self.__settings)
         self.classifier: RandomForestClassifier = None
+        self.moved = 0
+        self.skipped = 0
 
     @property
     def msgs_file(self) -> str:
-        return join(self.settings["data_directory"], "msgs")
+        return join(self.__settings["data_directory"], "msgs")
 
     @property
     def embd_file(self) -> str:
-        return join(self.settings["data_directory"], "embd")
+        return join(self.__settings["data_directory"], "embd")
 
     @property
     def model_file(self) -> str:
-        return join(self.settings["data_directory"], "model.pkl")
+        return join(self.__settings["data_directory"], "model.pkl")
 
-    def mesg_hash(self, mesg: str) -> str:
+    def __mesg_hash(self, mesg: str) -> str:
         return sha256(mesg["body"].encode("utf-8")).hexdigest()[:12]
 
-    def connect_openai(self) -> bool:
-        if not self.settings["openai_api_key"]:
+    def __connect_openai(self) -> bool:
+        if not self.__settings["openai_api_key"]:
             return False
 
         # check if api key is valid
         try:
-            self.client = OpenAI(api_key=self.settings["openai_api_key"])
+            self.__client = OpenAI(api_key=self.__settings["openai_api_key"])
         except APIError as e:
             self.logger.error(e)
             return False
@@ -78,55 +80,71 @@ class ISH:
 
     def configure_and_connect(self):
         """Configure ish and connect to imap and openai"""
-        settings = self.settings
+        settings = self.__settings
 
-        self.settings.update_data_settings()
+        self.__settings.update_data_settings()
 
-        while not self.imap_conn.connect_imap():
+        while not self.__imap_conn.connect_imap():
             settings.update_login_settings()
 
-        while not self.connect_openai():
+        while not self.__connect_openai():
             settings.update_openai_settings()
 
-        folders = self.imap_conn.list_folders()
+        folders = self.__imap_conn.list_folders()
         settings.update_folder_settings(folders)
 
         print("Configuration complete")
 
     def connect_noninteractive(self) -> bool:
         """Connect to imap and openai without user interaction"""
-        if not self.imap_conn.connect_imap():
+        if not self.__imap_conn.connect_imap():
             self.logger.error(
                 "Failed to connect to imap server. Configure, or check your settings in %s",
-                self.settings.settings_file,
+                self.__settings.settings_file,
             )
             return False
 
-        if not self.connect_openai():
+        if not self.__connect_openai():
             self.logger.error(
                 "Failed to connect to openai. Configure or check your settings in %s",
-                self.settings.settings_file,
+                self.__settings.settings_file,
             )
             return False
 
         return True
 
     @staticmethod
-    def backoff_debug(details):
+    def __backoff_debug(details):
         base_logger.info("Backing off {wait:0.1f} seconds after {tries} tries ")
 
-    @backoff.on_exception(backoff.expo, RateLimitError, on_backoff=backoff_debug)
-    def get_embedding(self, text):
-        e: CreateEmbeddingResponse = self.client.embeddings.create(
-            input=[text], model=self.settings["openai_model"]
+    @backoff.on_exception(backoff.expo, RateLimitError, on_backoff=__backoff_debug)
+    def __get_embedding(self, text:str) -> CreateEmbeddingResponse:
+        """Get the embedding from OpenAI
+
+        Args:
+            text (str): the message text
+
+        Returns:
+            CreateEmbeddingResponse: the embeddings
+        """
+        e: CreateEmbeddingResponse = self.__client.embeddings.create(
+            input=[text], model=self.__settings["openai_model"]
         )
         return e
 
     def get_msgs(self, folder: str, uids: List[int]) -> Dict[int, str]:
-        """Fetch new messages through cache {uid: 'msg'}"""
+        """Fetch new messages through cache {uid: 'msg'}
+
+        Args:
+            folder (str): source folder
+            uids (List[int]): uids
+
+        Returns:
+            Dict[int, str]: message body by uid
+        """
         d = {}
         new_uids = []
-        imap_conn = self.imap_conn
+        imap_conn = self.__imap_conn
         self.logger.info("Getting %i messages from %s", len(uids), folder)
         with shelve.open(self.msgs_file, writeback=False) as fm:
             # Check if the message/folder combination is in the cache.
@@ -144,7 +162,7 @@ class ISH:
                 msgs = imap_conn.fetch(new_uids)
                 for uid in new_uids:
                     mesg = imap_conn.parse_mesg(msgs[uid])
-                    msg_hash = self.mesg_hash(mesg)
+                    msg_hash = self.__mesg_hash(mesg)
                     fm[f"{folder}:{uid}"] = msg_hash
                     fm[f"{msg_hash}.mesg"] = mesg
                     d[uid] = mesg
@@ -153,7 +171,15 @@ class ISH:
         return d
 
     def get_embeddings(self, folder: str, uids: List[int]) -> Dict[int, np.ndarray]:
-        """Get embeddings using OpenAI API through cache {uid: embedding}"""
+        """ Get embeddings using OpenAI API through cache {uid: embedding}
+
+        Args:
+            folder (str): the source folder
+            uids (List[int]): uids to get embeddings for
+
+        Returns:
+            Dict[int, np.ndarray]: embeddings by uid
+        """
         dhash = {}
         dembd = {}
         self.logger.info("Getting %i embeddings from %s", len(uids), folder)
@@ -176,7 +202,7 @@ class ISH:
             self.logger.debug("Adding hashes for %i messages", len(dmesg))
             # Saving hashes for unseen messages.
             for uid, mesg in dmesg.items():
-                msg_hash = self.mesg_hash(mesg)
+                msg_hash = self.__mesg_hash(mesg)
                 dhash[uid] = msg_hash
                 fm[f"{folder}:{uid}"] = msg_hash
             self.logger.debug("Added hashes for messages.")
@@ -206,14 +232,23 @@ class ISH:
                 self.logger.debug("Adding embeddings for %i messages", len(dmesg))
                 # TODO: Batch the embeddings lookup.
                 for uid, msg in msgs.items():
-                    dembd[uid] = self.get_embedding(msg["body"][: embed_max_chars])
+                    dembd[uid] = self.__get_embedding(msg["body"][: embed_max_chars])
                     fe[f"{dhash[uid]}.embd"] = dembd[uid]
 
         self.logger.info("Total embeddings found/added %i in %s.", len(dembd), folder)
         return dembd
 
     def learn_folders(self, folders: List[str]) -> RandomForestClassifier:
-        imap_conn = self.imap_conn
+        """ Learn the (source) folders using cached and fetched embeddings
+            Also always saves the model pickle to disk
+
+        Args:
+            folders (List[str]): the source folders
+
+        Returns:
+            RandomForestClassifier: the classifier being used
+        """
+        imap_conn = self.__imap_conn
         embed_array = []
         folder_array = []
 
@@ -258,6 +293,7 @@ class ISH:
 
         joblib.dump(self.classifier, self.model_file)
         self.logger.info("Saved classifier.")
+        return clf
 
     def classify_messages(self, source_folders: List[str], interactive=True) -> None:
         """Classify and move messages for all source folders
@@ -267,18 +303,18 @@ class ISH:
             interactive (bool, optional): 
                 Interactive or non-interactive mode. Defaults to interactive.
         """
-        imap_conn: ImapHelper = self.imap_conn
+        imap_conn: ImapHelper = self.__imap_conn
+
+        self.skipped = 0
+        self.moved = 0
 
         if not interactive:
             classifier = joblib.load(self.model_file)
         else:
             classifier = self.classifier
 
-        skipped = 0
-        moved = 0
-
         for folder in source_folders:
-            uid = []
+            uids = []
             self.logger.info("Classifying messages for folder {folder}")
             # Retrieve the UIDs of all messages in the folder
             if not interactive:
@@ -295,7 +331,7 @@ class ISH:
                 proba = classifier.predict_proba([embd.data[0].embedding])[0]
                 ranks = sorted(zip(proba, classifier.classes_), reverse=True)
 
-                (top_probability,) = ranks[0]
+                (top_probability, predcited_class) = ranks[0]
                 if top_probability > 0.25:
                     mess_to_move = {
                         "uid": uid,
@@ -307,44 +343,70 @@ class ISH:
                         f'\n{uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}'
                     )
 
+                    for p, c in ranks[:3]:
+                        print(f"{p:.2f}: {c}")
+                    
+                    if interactive and not self.__select_move(dest_folder):
+                        self.logger.debug(f"""Skipping due to probability {top_probability:.2f}%
+                                      {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}""")
+                        self.skipped += 1
+                        continue
+
                     if dest_folder not in to_move:
                         to_move[dest_folder] = [mess_to_move]
                     else:
                         to_move[dest_folder].append(mess_to_move)
 
-                    for p, c in ranks[:3]:
-                        print(f"{p:.2f}: {c}")
-                    # TODO: Move messages in batch.
-                    (moved, skipped) = self.move_message(
-                        skipped, moved, folder, uid, dest_folder, interactive
-                    )
                 else:
-                    skipped += 1
+                    self.logger.debug(f"""Skipping due to probability {top_probability:.2f}%
+                                      {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}""")
+                    self.skipped += 1
+            self.logger.info("Finished predicting %s", folder)
+            self.moved += self.move_messages(folder, to_move)
+        self.logger.info("Finished moved %i and skipped %i", self.moved, self.skipped)
 
-        self.logger.info("Finished moved %i and skipped %i", moved, skipped)
+    def __select_move(self, dest_folder:str) -> bool:
+        """ Interactively ask user if to move.
 
-    def move_message(
-        self, skipped, moved, folder, uid, dest_folder, interactive
-    ) -> tuple[int, int]:
-        opt = None
-        imap_conn = self.imap_conn
-        if not interactive:
-            imap_conn.move(folder, uid, dest_folder)
-            moved += 1
-        else:
-            while opt not in ["y", "n", "q"]:
-                opt = input(f"Move message to {dest_folder}? [y]yes, [n]no, [q]quit:")
-                if opt == "y":
-                    imap_conn.move(folder, uid, dest_folder)
-                    moved += 1
-                elif opt == "q":
-                    self.logger.info(
-                        "Quitting. Finished moved %i and skipped %i", moved, skipped
-                    )
-                    sys.exit(0)
-                elif opt == "n":
-                    skipped += 1
-        return moved, skipped
+        Args:
+            dest_folder (str): destination folder
+
+        Returns:
+            bool: True if to move message
+        """
+        opt = ""
+        while opt not in ["y", "n", "q"]:
+            opt = input(f"Move message to {dest_folder}? [y]yes, [n]no, [q]quit:")
+            if opt == "y":
+                return True
+            elif opt == "q":
+                self.logger.info("Quitting.")
+                sys.exit(0)
+            elif opt == "n":
+                return False
+    
+    def move_messages(
+        self, folder:str, messages:dict[str,list]) -> int:
+        """ Move the messages market for moving, by target folder.
+
+        Args:
+            folder (str): source folder
+            messages (dict[str,list]): dict of destination folder names and lists of messages
+
+        Returns:
+            int: number of messages moved
+        """
+        imap_conn = self.__imap_conn
+        moved = 0
+        for dest_folder in messages:
+            messages_list = messages[dest_folder]
+            uids:list = [mess["uid"] for mess in messages_list]
+
+            imap_conn.move(folder, uids, dest_folder)
+            moved += len(uids)
+
+        return len(uids)
+
 
     def run(self, interactive: bool) -> int:
         try:
@@ -354,7 +416,7 @@ class ISH:
                 if not self.connect_noninteractive():
                     return 1
 
-            settings = self.settings
+            settings = self.__settings
 
             for f in settings["source_folders"]:
                 self.logger.info("Source folder: %s", f)
@@ -375,7 +437,7 @@ class ISH:
 
 def main():
     ish = ISH()
-    r = ish.run(interactive=True)
+    r = ish.run(interactive=False)
     sys.exit(r)
 
 
