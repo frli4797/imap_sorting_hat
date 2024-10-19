@@ -2,6 +2,7 @@ import email
 import imaplib
 import logging
 import re
+import string
 
 import bs4
 import imapclient
@@ -16,21 +17,23 @@ hkey = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
 bkey = b"BODY[]"
 
 
-def __html2text(html: str) -> str:
+def html2text(html: str) -> str:
     """Convert html to plain-text using beautifulsoup"""
     soup = bs4.BeautifulSoup(html, "html.parser")
     text = soup.get_text(separator=" ")
+    text=''.join(filter(lambda x: x in string.printable, text))
+    text = re.sub(r'&[a-z]{3,4};', ' ', text)
     return text
 
 
-def __mesg_to_text(mesg: email.message.Message) -> str:
+def mesg_to_text(mesg: email.message.Message) -> str:
     """Convert an email message to plain-text"""
     text = ""
     for part in mesg.walk():
         if part.get_content_type() == "text/plain":
             text += part.get_payload(decode=True).decode("utf-8", errors="ignore")
         elif part.get_content_type() == "text/html":
-            text += __html2text(
+            text += html2text(
                 part.get_payload(decode=True).decode("utf-8", errors="ignore")
             )
 
@@ -118,7 +121,7 @@ class ImapHelper:
         header = mesg[hkey].decode("utf-8")
         raw_body = mesg[bkey]
         payload = email.message_from_bytes(raw_body)
-        body_text = __mesg_to_text(payload)
+        body_text = mesg_to_text(payload)
         header_lines = re_newline.split(header)
 
         header_dict = {}
