@@ -11,6 +11,14 @@
       "program": "${workspaceFolder}/ish.py",
       "console": "integratedTerminal",
       "justMyCode": false
+    },
+    {
+      "name": "MIgrator",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/migrator.py",
+      "console": "integratedTerminal",
+      "justMyCode": false
     }
   ]
 }
