@@ -1,10 +1,5 @@
 import shelve
-import sys
-from getpass import getpass
-from hashlib import sha256
-from os.path import exists, isdir, join
-from time import perf_counter
-from typing import Dict, List
+from os.path import join
 from ish import Settings
 
 settings = Settings()
@@ -13,7 +8,8 @@ msg_file =                  join(settings['data_directory'], 'msgs')
 embd_file =                 join(settings['data_directory'], 'embd')
 migrated_embeddings_file =  join(settings['data_directory'], 'embd_raw')
 
-with shelve.open(embd_file, writeback=True) as fe, shelve.open(migrated_embeddings_file, writeback=True) as f_migrated: 
+with shelve.open(embd_file, writeback=True) as fe,\
+    shelve.open(migrated_embeddings_file, writeback=True) as f_migrated:
     keys = fe.keys()
     for key in keys:
         embedding = fe[key]

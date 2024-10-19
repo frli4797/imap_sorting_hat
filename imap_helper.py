@@ -95,7 +95,7 @@ class ImapHelper:
         Returns:
             int: number of messages moved
         """
-        if type(uids) is not list and len(uids) > 0:
+        if isinstance(uids, list) and len(uids) > 0:
             self.logger.error("Expected the uids to be a non empty list")
             raise ValueError("Expected uids to be a non empty list")
 
@@ -157,4 +157,3 @@ class ImapHelper:
         }
 
         return mesg_dict
-

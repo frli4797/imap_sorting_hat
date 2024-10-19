@@ -43,7 +43,6 @@ class ISH:
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.DEBUG)
-        
         self.__settings = Settings()
         self.__client: OpenAI = None
         self.__imap_conn: ImapHelper = ImapHelper(self.__settings)
@@ -344,10 +343,11 @@ class ISH:
 
                     for p, c in ranks[:3]:
                         print(f"{p:.2f}: {c}")
-                    
+
                     if interactive and not self.__select_move(dest_folder):
-                        self.logger.debug(f"""Skipping due to probability {top_probability:.2f}%
-                                      {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}""")
+                        self.logger.debug(
+                            f"""Skipping due to probability {top_probability:.2f}%
+                                {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}""")
                         self.skipped += 1
                         continue
 
@@ -357,8 +357,9 @@ class ISH:
                         to_move[dest_folder].append(mess_to_move)
 
                 else:
-                    self.logger.debug(f"""Skipping due to probability {top_probability:.2f}%
-                                      {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}""")
+                    self.logger.debug(
+                        f"""Skipping due to probability {top_probability:.2f}%
+                            {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}""")
                     self.skipped += 1
             self.logger.info("Finished predicting %s", folder)
             self.moved += self.move_messages(folder, to_move)
@@ -383,7 +384,7 @@ class ISH:
                 sys.exit(0)
             elif opt == "n":
                 return False
-    
+
     def move_messages(
         self, folder:str, messages:dict[str,list]) -> int:
         """ Move the messages market for moving, by target folder.
