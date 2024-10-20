@@ -112,13 +112,15 @@ class ISH:
 
         return True
 
-    @staticmethod
-    def __backoff_debug(details):
-        base_logger.info(
-            "Backing off {wait:0.1f} seconds after {tries} tries ".format(**details)
-        )
-
-    @backoff.on_exception(backoff.expo, RateLimitError, on_backoff=__backoff_debug)
+    @backoff.on_exception(
+        backoff.expo,
+        RateLimitError,
+        on_backoff=lambda details: base_logger.warning(
+            "Backing off %0.1f seconds after %i tries",
+            details["wait"],
+            details["tries"],
+        ),
+    )
     def __get_embedding(self, text: str) -> list:
         """Get the embedding from OpenAI
 
@@ -132,6 +134,20 @@ class ISH:
             input=[text], model=self.__settings["openai_model"]
         )
         return e.data[0].embedding
+
+    def __get_embeddings(self, texts: list[str]) -> list:
+        """Get the embedding from OpenAI
+
+        Args:
+            text (str): the message text
+
+        Returns:
+            CreateEmbeddingResponse: the embeddings
+        """
+        e: CreateEmbeddingResponse = self.__client.embeddings.create(
+            input=texts, model=self.__settings["openai_model"]
+        )
+        return [emb_obj.embedding for emb_obj in e.data]
 
     def get_msgs(self, folder: str, uids: List[int]) -> Dict[int, str]:
         """Fetch new messages through cache {uid: 'msg'}
@@ -223,18 +239,25 @@ class ISH:
             if len(new_uids) > 0:
                 self.logger.debug("Found %i embeddings not in cache", len(new_uids))
                 msgs = self.get_msgs(folder, new_uids)
-                # messages = list(msg['body'][:embed_max_chars] for msg in msgs.values() )
-                # e = self.client.embeddings.create(input = messages,
-                #   model=self.settings['openai_model'])
-                # if len(e.data) == len( msgs.keys()):
-                #     self.logger.info("EQUAL")
-                # else:
-                #     self.logger.info("NOT equal")
+                messages = list(msg["body"][:embed_max_chars] for msg in msgs.values())
+
+                t_batch_0 = perf_counter()
+                embeddings = self.__get_embeddings(messages)
+                t_batch_1 = perf_counter()
+                if len(embeddings) == len(msgs.keys()):
+                    self.logger.debug(
+                        "EQUAL: Took %.2f to BATCH embedings.", t_batch_0 - t_batch_1
+                    )
+                else:
+                    self.logger.info("NOT equal")
                 self.logger.debug("Adding embeddings for %i messages", len(dmesg))
                 # TODO: Batch the embeddings lookup.
+                t_0 = perf_counter()
                 for uid, msg in msgs.items():
                     dembd[uid] = self.__get_embedding(msg["body"][:embed_max_chars])
                     fe[f"{dhash[uid]}.embd"] = dembd[uid]
+                t_1 = perf_counter()
+                self.logger.debug("Took %.2f to download embedings.", t_0 - t_1)
 
         self.logger.info("Total embeddings found/added %i in %s.", len(dembd), folder)
         return dembd
@@ -285,6 +308,7 @@ class ISH:
 
         self.classifier = clf.fit(X_train, y_train)
         accuracy = clf.score(X_test, y_test)
+        self.logger.info("Trained with %i embeddings", len(embed_array))
         self.logger.info("Accuracy: %.2f", accuracy)
         self.logger.info("Classifier: %s", self.classifier)
 
@@ -348,8 +372,12 @@ class ISH:
 
                     if interactive and not self.__select_move(dest_folder):
                         self.logger.debug(
-                            f"""Skipping due to probability {top_probability:.2f}%
-                                {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}"""
+                            """Skipping due to probability %.2f
+                                %i From %s: %s""",
+                            top_probability,
+                            uid,
+                            mess_to_move["from"],
+                            mess_to_move["body"],
                         )
                         self.skipped += 1
                         continue
@@ -361,8 +389,12 @@ class ISH:
 
                 else:
                     self.logger.debug(
-                        f"""Skipping due to probability {top_probability:.2f}%
-                            {uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}"""
+                        """Skipping due to probability %.2f
+                                %i From %s: %s""",
+                        top_probability,
+                        uid,
+                        mess_to_move["from"],
+                        mess_to_move["body"],
                     )
                     self.skipped += 1
             self.logger.info("Finished predicting %s", folder)
@@ -404,8 +436,8 @@ class ISH:
         for dest_folder in messages:
             messages_list = messages[dest_folder]
             uids: list = [mess["uid"] for mess in messages_list]
-
-            imap_conn.move(folder, uids, dest_folder)
+            if len(uids) > 0:
+                imap_conn.move(folder, uids, dest_folder)
             moved += len(uids)
 
         return moved
@@ -421,10 +453,10 @@ class ISH:
             settings = self.__settings
 
             for f in settings["source_folders"]:
-                self.logger.info("Source folder: %s", f)
+                self.logger.debug("Source folder: %s", f)
 
             for f in settings["destination_folders"]:
-                self.logger.info("Destination folder: %s", f)
+                self.logger.debug("Destination folder: %s", f)
 
             if interactive:
                 self.learn_folders(settings["destination_folders"])
