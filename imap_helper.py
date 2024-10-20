@@ -21,8 +21,8 @@ def html2text(html: str) -> str:
     """Convert html to plain-text using beautifulsoup"""
     soup = bs4.BeautifulSoup(html, "html.parser")
     text = soup.get_text(separator=" ")
-    text=''.join(filter(lambda x: x in string.printable, text))
-    text = re.sub(r'&[a-z]{3,4};', ' ', text)
+    text = "".join(filter(lambda x: x in string.printable, text))
+    text = re.sub(r"&[a-z]{3,4};", " ", text)
     return text
 
 
@@ -54,7 +54,9 @@ class ImapHelper:
 
         try:
             self.__imap_conn = imapclient.IMAPClient(self.__settings["host"], ssl=True)
-            self.__imap_conn.login(self.__settings["username"], self.__settings["password"])
+            self.__imap_conn.login(
+                self.__settings["username"], self.__settings["password"]
+            )
         except imaplib.IMAP4.error as e:
             self.logger.error(e)
             return False
@@ -79,12 +81,14 @@ class ImapHelper:
             list: list of uids
         """
         if search_args is None:
-            search_args = ['ALL']
+            search_args = ["ALL"]
         self.__imap_conn.select_folder(folder)
         results = self.__imap_conn.search(search_args)
         return results
 
-    def move(self, folder: str, uids: list, dest_folder: str, flag_messages=True) -> int:
+    def move(
+        self, folder: str, uids: list, dest_folder: str, flag_messages=True
+    ) -> int:
         """Move a message from one folder to another
 
         Args:
@@ -95,9 +99,14 @@ class ImapHelper:
         Returns:
             int: number of messages moved
         """
-        if isinstance(uids, list) and len(uids) > 0:
-            self.logger.error("Expected the uids to be a non empty list")
-            raise ValueError("Expected uids to be a non empty list")
+        if not isinstance(uids, list):
+            self.logger.error(
+                "Expected the uids to be a list \
+                              moving from folder %s to folder %s",
+                folder,
+                dest_folder,
+            )
+            raise ValueError("Expected uids to be a list")
 
         self.__imap_conn.select_folder(folder)
         if flag_messages:
@@ -106,7 +115,9 @@ class ImapHelper:
         self.__imap_conn.copy(uids, dest_folder)
         self.__imap_conn.add_flags(uids, imapclient.DELETED, silent=True)
         self.__imap_conn.uid_expunge(uids)
-        self.logger.info("REALLY moved from %s to %s: %i", folder, dest_folder, len(uids))
+        self.logger.info(
+            "REALLY moved from %s to %s: %i", folder, dest_folder, len(uids)
+        )
         return len(uids)
 
     def parse_mesg(self, mesg: dict) -> dict:
