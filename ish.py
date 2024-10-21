@@ -33,10 +33,12 @@ from imap_helper import ImapHelper
 from settings import Settings
 
 logging.basicConfig(level=logging.INFO)
-
+logging.getLogger("httpx").setLevel(logging.WARNING)
 base_logger = logging.getLogger("ish")
 
 embed_max_chars = 16384
+max_source_messages = 160
+max_learn_messages = 800
 
 
 class ISH:
@@ -239,35 +241,43 @@ class ISH:
             if len(new_uids) > 0:
                 self.logger.debug("Found %i embeddings not in cache", len(new_uids))
                 msgs = self.get_msgs(folder, new_uids)
-                messages = list(msg["body"][:embed_max_chars] for msg in msgs.values())
 
                 t_batch_0 = perf_counter()
-                embeddings = self.__get_embeddings(messages)
+                embeddings = self.__get_embeddings(
+                    list(msg["body"][:embed_max_chars] for msg in msgs.values())
+                )
                 t_batch_1 = perf_counter()
                 if len(embeddings) == len(msgs.keys()):
                     self.logger.debug(
-                        "EQUAL: Took %.2f to BATCH embedings.", t_batch_0 - t_batch_1
+                        "Took %.2f to BATCH %i embedings.",
+                        t_batch_1 - t_batch_0,
+                        len(embeddings),
                     )
                 else:
-                    self.logger.info("NOT equal")
-                self.logger.debug("Adding embeddings for %i messages", len(dmesg))
-                # TODO: Batch the embeddings lookup.
+                    self.logger.error(
+                        "Embeddings list is not same length as messages list"
+                    )
+                    raise IndexError(
+                        "Embeddings list is not same length as messages list"
+                    )
+                self.logger.debug("Storing embeddings for %i messages", len(dmesg))
+
                 t_0 = perf_counter()
-                for uid, msg in msgs.items():
-                    dembd[uid] = self.__get_embedding(msg["body"][:embed_max_chars])
-                    fe[f"{dhash[uid]}.embd"] = dembd[uid]
+                for idx, uid in enumerate(msgs):
+                    # dembd[uid] = self.__get_embedding(msg["body"][:embed_max_chars])
+                    fe[f"{dhash[uid]}.embd"] = embeddings[idx]
                 t_1 = perf_counter()
-                self.logger.debug("Took %.2f to download embedings.", t_0 - t_1)
+                self.logger.debug("Took %.2f to download embedings.", t_1 - t_0)
 
         self.logger.info("Total embeddings found/added %i in %s.", len(dembd), folder)
         return dembd
 
     def learn_folders(self, folders: List[str]) -> RandomForestClassifier:
-        """Learn the (source) folders using cached and fetched embeddings
+        """Learn the (target) folders using cached and fetched embeddings
             Also always saves the model pickle to disk
 
         Args:
-            folders (List[str]): the source folders
+            folders (List[str]): the target folders
 
         Returns:
             RandomForestClassifier: the classifier being used
@@ -282,7 +292,7 @@ class ISH:
             self.logger.info("Learning folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
             uids = imap_conn.search(folder, ["ALL"])
-            embd = self.get_embeddings(folder, uids[:80])
+            embd = self.get_embeddings(folder, uids[:max_learn_messages])
             embed_array.extend(embd.values())
             folder_array.extend([folder] * len(embd))
 
@@ -294,13 +304,8 @@ class ISH:
         # Train a classifier
         self.logger.info("Training classifier...")
 
-        all_embeddings: List = []
-        for embd in embed_array:
-            embedding = embd
-            all_embeddings.append(embedding)
-
-        X = np.array(all_embeddings)
-        y = np.array([folder for folder in folder_array])
+        X = np.array(embed_array)
+        y = np.array(folder_array)
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
 
@@ -332,11 +337,9 @@ class ISH:
 
         self.skipped = 0
         self.moved = 0
-
-        if not interactive:
+        classifier = self.classifier
+        if self.classifier is None:
             classifier = joblib.load(self.model_file)
-        else:
-            classifier = self.classifier
 
         for folder in source_folders:
             uids = []
@@ -347,8 +350,8 @@ class ISH:
             else:
                 uids = imap_conn.search(folder, ["ALL"])
 
-            embd = self.get_embeddings(folder, uids[:160])
-            mesgs = self.get_msgs(folder, uids[:160])
+            embd = self.get_embeddings(folder, uids[:max_source_messages])
+            mesgs = self.get_msgs(folder, uids[:max_source_messages])
 
             to_move: dict[str, list] = {}
             for uid, embd in embd.items():
@@ -415,10 +418,10 @@ class ISH:
             opt = input(f"Move message to {dest_folder}? [y]yes, [n]no, [q]quit:")
             if opt == "y":
                 return True
-            elif opt == "q":
+            if opt == "q":
                 self.logger.info("Quitting.")
                 sys.exit(0)
-            elif opt == "n":
+            else:
                 return False
 
     def move_messages(self, folder: str, messages: dict[str, list]) -> int:
@@ -442,7 +445,7 @@ class ISH:
 
         return moved
 
-    def run(self, interactive: bool) -> int:
+    def run(self, interactive: bool = False, train=True) -> int:
         try:
             if interactive:
                 self.configure_and_connect()
@@ -458,7 +461,7 @@ class ISH:
             for f in settings["destination_folders"]:
                 self.logger.debug("Destination folder: %s", f)
 
-            if interactive:
+            if train:
                 self.learn_folders(settings["destination_folders"])
 
             self.classify_messages(settings["source_folders"], interactive=interactive)
@@ -471,7 +474,7 @@ class ISH:
 
 def main():
     ish = ISH()
-    r = ish.run(interactive=False)
+    r = ish.run(interactive=False, train=True)
     sys.exit(r)
 
 
