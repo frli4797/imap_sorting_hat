@@ -42,9 +42,14 @@ max_learn_messages = 800
 
 
 class ISH:
+    debug = False
+
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.logger.setLevel(logging.DEBUG)
+
+        if ISH.debug:
+            self.logger.setLevel(logging.DEBUG)
+
         self.__settings = Settings()
         self.__client: OpenAI = None
         self.__imap_conn: ImapHelper = ImapHelper(self.__settings)
@@ -472,11 +477,69 @@ class ISH:
         return 0
 
 
-def main():
+def main(args: Dict[str, str]):
+    ISH.debug = bool(args.pop("verbose"))
+    dry_run = bool(args.pop("dry_run"))
+    daemonize = bool(args.pop("daemon"))
+    interactive = bool(args.pop("interactive"))
+    train = bool(args.pop("learn_folders"))
+    config_path = args.pop("config_path")
+
     ish = ISH()
-    r = ish.run(interactive=False, train=True)
+    r = ish.run(interactive=False, train=False)
     sys.exit(r)
 
 
 if __name__ == "__main__":
-    main()
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Lorem ipsum")
+
+    parser.add_argument(
+        "--learn-folders",
+        "-l",
+        help="Learn based on the contents of the destination folders",
+        action="store_true",
+        default=False,
+    )
+
+    parser.add_argument(
+        "--interactive",
+        "-i",
+        help="Prompt user before moving anything",
+        action="store_true",
+        default=False,
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        "-n",
+        help="Don't actually move emails",
+        action="store_true",
+        default=False,
+    )
+
+    parser.add_argument(
+        "--daemon",
+        "-d",
+        help="Run in daemon mode (NOT IMPLEMENTED)",
+        action="store_true",
+        default=False,
+    )
+
+    parser.add_argument(
+        "--config-path",
+        "-C",
+        type=str,
+        help="Path for config file and data",
+    )
+
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        help="Verbose/debug mode",
+        action="store_true",
+        default=False,
+    )
+    main(vars(parser.parse_args()))

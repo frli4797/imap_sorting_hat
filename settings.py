@@ -38,8 +38,10 @@ class Settings(dict):
             yaml.dump(dict(self), f)
             self.logger.info("Settings saved to %s", self.settings_file)
 
-    def __init__(self):
+    def __init__(self, debug=False):
         self.logger = logging.getLogger(self.__class__.__name__)
+        if debug:
+            self.logger.setLevel(logging.DEBUG)
 
         self["source_folders"] = []
         self["destination_folders"] = []
@@ -116,7 +118,8 @@ class Settings(dict):
         if missing_folders:
             for folder in missing_folders:
                 self.logger.info(
-                    f"Folder {folder} is missing. It will be removed from the settings."
+                    "Folder %s is missing. It will be removed from the settings.",
+                    folder,
                 )
 
             source_folders -= missing_folders
