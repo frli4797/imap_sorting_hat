@@ -21,7 +21,8 @@
       "program": "${workspaceFolder}/ish.py",
       "console": "integratedTerminal",
       "justMyCode": false, 
-      "args": ["-v"]
+      "args": ["-v"], 
+      //"env":{"ISH_CONFIG_PATH": "dummy"}
     },
     {
       "name": "MIgrator",

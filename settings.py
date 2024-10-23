@@ -23,8 +23,10 @@ class Settings(dict):
 
     @property
     def settings_file(self):
-        ishd = os.path.join(self.get_user_directory(), ".ish")
-        os.makedirs(ishd, exist_ok=True)
+        ishd = os.environ.get("ISH_CONFIG_PATH")
+        if ishd is None or ishd == "":
+            ishd = os.path.join(self.get_user_directory(), ".ish")
+            os.makedirs(ishd, exist_ok=True)
         ishfile = os.path.join(ishd, "settings.yaml")
         return ishfile
 

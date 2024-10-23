@@ -14,6 +14,7 @@ Status: Early development
 """
 
 import logging
+import os
 import shelve
 import sys
 from hashlib import sha256
@@ -49,8 +50,7 @@ class ISH:
 
         if ISH.debug:
             self.logger.setLevel(logging.DEBUG)
-
-        self.__settings = Settings()
+        self.__settings = Settings(ISH.debug)
         self.__client: OpenAI = None
         self.__imap_conn: ImapHelper = ImapHelper(self.__settings)
         self.classifier: RandomForestClassifier = None
@@ -484,9 +484,11 @@ def main(args: Dict[str, str]):
     interactive = bool(args.pop("interactive"))
     train = bool(args.pop("learn_folders"))
     config_path = args.pop("config_path")
+    if config_path is not None and not config_path == "":
+        os.environ["ISH_CONFIG_PATH"] = config_path
 
     ish = ISH()
-    r = ish.run(interactive=False, train=False)
+    r = ish.run(interactive=interactive, train=train)
     sys.exit(r)
 
 
@@ -494,14 +496,15 @@ if __name__ == "__main__":
 
     import argparse
 
+    userhomedir = Settings.get_user_directory()
     parser = argparse.ArgumentParser(description="Lorem ipsum")
-
+    # Environment variables always takes precedence.
     parser.add_argument(
         "--learn-folders",
         "-l",
         help="Learn based on the contents of the destination folders",
         action="store_true",
-        default=False,
+        default=(os.environ.get("ISH_LEARN_FOLDERS")),
     )
 
     parser.add_argument(
@@ -509,7 +512,7 @@ if __name__ == "__main__":
         "-i",
         help="Prompt user before moving anything",
         action="store_true",
-        default=False,
+        default=bool(os.environ.get("ISH_INTERACTIVE")),
     )
 
     parser.add_argument(
@@ -517,7 +520,7 @@ if __name__ == "__main__":
         "-n",
         help="Don't actually move emails",
         action="store_true",
-        default=False,
+        default=bool(os.environ.get("ISH_DRY_RUN")),
     )
 
     parser.add_argument(
@@ -532,7 +535,7 @@ if __name__ == "__main__":
         "--config-path",
         "-C",
         type=str,
-        help="Path for config file and data",
+        help=f"Path for config file and data. Will default to {userhomedir}/.ish",
     )
 
     parser.add_argument(
@@ -540,6 +543,6 @@ if __name__ == "__main__":
         "-v",
         help="Verbose/debug mode",
         action="store_true",
-        default=False,
+        default=bool(os.environ.get("ISH_VERBOSE")),
     )
     main(vars(parser.parse_args()))

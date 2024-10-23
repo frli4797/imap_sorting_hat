@@ -3,6 +3,6 @@ openai
 scikit-learn
 pyyaml
 IMAPClient
-bs4
+beautifulsoup4
 requests
 backoff
