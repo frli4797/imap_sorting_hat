@@ -30,6 +30,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
 from imap_helper import ImapHelper
+from model_manager import ModelManager, OllamaManager
 from settings import Settings
 
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +52,7 @@ class ISH:
             self.logger.setLevel(logging.DEBUG)
 
         self.__settings = Settings()
-        self.__client: OpenAI = None
+        self.__client: ModelManager = None
         self.__imap_conn: ImapHelper = ImapHelper(self.__settings)
         self.classifier: RandomForestClassifier = None
         self.moved = 0
@@ -73,12 +74,16 @@ class ISH:
         return sha256(mesg["body"].encode("utf-8")).hexdigest()[:12]
 
     def __connect_openai(self) -> bool:
-        if not self.__settings["openai_api_key"]:
+        self.__client = OllamaManager(self.__settings)
+        self.__client.connect()
+        return True
+
+        if not self.__settings["ai_api_key"]:
             return False
 
         # check if api key is valid
         try:
-            self.__client = OpenAI(api_key=self.__settings["openai_api_key"])
+            self.__client = OpenAI(api_key=self.__settings["ai_api_key"])
         except APIError as e:
             self.logger.error(e)
             return False
@@ -94,7 +99,7 @@ class ISH:
             settings.update_login_settings()
 
         while not self.__connect_openai():
-            settings.update_openai_settings()
+            settings.update_ai_settings()
 
         folders = self.__imap_conn.list_folders()
         settings.update_folder_settings(folders)
@@ -138,7 +143,7 @@ class ISH:
             CreateEmbeddingResponse: the embeddings
         """
         e: CreateEmbeddingResponse = self.__client.embeddings.create(
-            input=[text], model=self.__settings["openai_model"]
+            input=[text], model=self.__settings["ai_model"]
         )
         return e.data[0].embedding
 
@@ -152,7 +157,7 @@ class ISH:
             CreateEmbeddingResponse: the embeddings
         """
         e: CreateEmbeddingResponse = self.__client.embeddings.create(
-            input=texts, model=self.__settings["openai_model"]
+            input=texts, model=self.__settings["ai_model"]
         )
         return [emb_obj.embedding for emb_obj in e.data]
 
@@ -248,9 +253,10 @@ class ISH:
                 msgs = self.get_msgs(folder, new_uids)
 
                 t_batch_0 = perf_counter()
-                embeddings = self.__get_embeddings(
-                    list(msg["body"][:embed_max_chars] for msg in msgs.values())
-                )
+                embeddings: list = self.__client.get_embeddings(list(msg["body"][:embed_max_chars] for msg in msgs.values()), 20)
+                # embeddings = self.__get_embeddings(
+                #    list(msg["body"][:embed_max_chars] for msg in msgs.values())
+                #)
                 t_batch_1 = perf_counter()
                 if len(embeddings) == len(msgs.keys()):
                     self.logger.debug(
@@ -266,10 +272,10 @@ class ISH:
                         "Embeddings list is not same length as messages list"
                     )
                 self.logger.debug("Storing embeddings for %i messages", len(dmesg))
-
+ 
                 t_0 = perf_counter()
                 for idx, uid in enumerate(msgs):
-                    # dembd[uid] = self.__get_embedding(msg["body"][:embed_max_chars])
+                    dembd[uid] = embeddings[idx]
                     fe[f"{dhash[uid]}.embd"] = embeddings[idx]
                 t_1 = perf_counter()
                 self.logger.debug("Took %.2f to download embedings.", t_1 - t_0)
@@ -486,7 +492,7 @@ def main(args: Dict[str, str]):
     config_path = args.pop("config_path")
 
     ish = ISH()
-    r = ish.run(interactive=False, train=False)
+    r = ish.run(interactive=interactive, train=train)
     sys.exit(r)
 
 

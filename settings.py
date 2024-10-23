@@ -50,8 +50,9 @@ class Settings(dict):
         self["username"] = ""
         self["password"] = ""
         self["data_directory"] = ""
-        self["openai_api_key"] = ""
-        self["openai_model"] = "text-embedding-ada-002"
+        self["ai_api_key"] = ""
+        self["ai_model"] = "text-embedding-ada-002"
+        self["ai_api_host"] = ""
 
         if exists(self.settings_file):
             self.read()
@@ -74,9 +75,9 @@ class Settings(dict):
 
         self.write()
 
-    def update_openai_settings(self):
-        self["openai_api_key"] = input(
-            "Enter OpenAI API key (see https://beta.openai.com)): "
+    def update_ai_settings(self):
+        self["ai_api_key"] = input(
+            "Enter API key: "
         )
         self.write()
 
