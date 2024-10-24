@@ -56,11 +56,12 @@ class OllamaManager(ModelManager):
                 result = result + e["embeddings"]
         except ollama.ResponseError as e:
             if e.status_code == 404:
-                self.__client.pull(self.__settings["ai_api_model"])
+                # self.__client.pull(self.__settings["ai_api_model"])
                 # Retry after pulling the model.
-                result = self.__client.embed(
-                    model=self.__settings["ai_api_model"], input=texts
-                )
+                #result = self.__client.embed(
+                #    model=self.__settings["ai_api_model"], input=texts
+                #)
+                raise e
             else:
                 raise e
         except Exception as e:
