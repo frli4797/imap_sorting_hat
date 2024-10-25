@@ -16,10 +16,12 @@ Status: Early development
 import logging
 import os
 import shelve
+import signal
 import sys
 from hashlib import sha256
 from itertools import batched
 from os.path import join
+from threading import Event
 from time import perf_counter
 from typing import Dict, List
 
@@ -42,6 +44,7 @@ base_logger = logging.getLogger("ish")
 embed_max_chars = 16384
 max_source_messages = 160
 max_learn_messages = 1600
+POLL_TIME_SEC = 120
 
 
 def env_to_bool(key:str):
@@ -49,8 +52,15 @@ def env_to_bool(key:str):
 
 class ISH:
     debug = False
+    _exit_event = Event()
 
-    def __init__(self) -> None:
+    _interactive = False
+    _train = False
+    _daemon = False
+
+    def __init__(
+        self, interactive: bool = False, train: bool = False, daemon: bool = False
+    ) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
         if ISH.debug:
@@ -58,9 +68,18 @@ class ISH:
         self.__settings = Settings(ISH.debug)
         self.__client: OpenAI = None
         self.__imap_conn: ImapHelper = ImapHelper(self.__settings)
+
+        self._interactive = interactive
+        self._train = train
+        self._daemon = daemon
+
         self.classifier: RandomForestClassifier = None
         self.moved = 0
         self.skipped = 0
+
+        # signal.signal(signal.SIGHUP, self.__do_reload)
+        signal.signal(signal.SIGINT, self.__do_exit)
+        signal.signal(signal.SIGTERM, self.__do_exit)
 
     @property
     def msgs_file(self) -> str:
@@ -73,6 +92,18 @@ class ISH:
     @property
     def model_file(self) -> str:
         return join(self.__settings.data_directory, "model.pkl")
+
+    @property
+    def train(self) -> bool:
+        return self._train
+
+    @property
+    def daemon(self) -> bool:
+        return self._daemon
+
+    @property
+    def interactive(self) -> bool:
+        return self._interactive
 
     def __mesg_hash(self, mesg: str) -> str:
         return sha256(mesg["body"].encode("utf-8")).hexdigest()[:12]
@@ -301,6 +332,8 @@ class ISH:
             embd = self.get_embeddings(folder, uids[:max_learn_messages])
             embed_array.extend(embd.values())
             folder_array.extend([folder] * len(embd))
+            if self._exit_event.is_set():
+                return
 
         t1 = perf_counter()
         self.logger.info(
@@ -336,13 +369,11 @@ class ISH:
         self.logger.debug("Saved classifier.")
         return clf
 
-    def classify_messages(self, source_folders: List[str], interactive=True) -> None:
+    def classify_messages(self, source_folders: List[str]) -> None:
         """Classify and move messages for all source folders
 
         Args:
             source_folders (List[str]): list of source folders
-            interactive (bool, optional):
-                Interactive or non-interactive mode. Defaults to interactive.
         """
         imap_conn: ImapHelper = self.__imap_conn
 
@@ -356,7 +387,7 @@ class ISH:
             uids = []
             self.logger.info("Classifying messages for folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
-            if not interactive:
+            if not self.interactive:
                 uids = imap_conn.search(folder, [b"UNSEEN"])
             else:
                 uids = imap_conn.search(folder, ["ALL"])
@@ -384,7 +415,7 @@ class ISH:
                     for p, c in ranks[:3]:
                         print(f"{p:.2f}: {c}")
 
-                    if interactive and not self.__select_move(dest_folder):
+                    if self.interactive and not self.__select_move(dest_folder):
                         self.logger.debug(
                             """Skipping due to probability %.2f
                                 %i From %s: %s""",
@@ -412,7 +443,7 @@ class ISH:
                     )
                     self.skipped += 1
             self.logger.info("Finished predicting %s", folder)
-            self.moved += self.move_messages(folder, to_move, interactive=interactive)
+            self.moved += self.move_messages(folder, to_move)
         self.logger.info("Finished moved %i and skipped %i", self.moved, self.skipped)
 
     def __select_move(self, dest_folder: str) -> bool:
@@ -435,9 +466,7 @@ class ISH:
             else:
                 return False
 
-    def move_messages(
-        self, folder: str, messages: dict[str, list], interactive: bool
-    ) -> int:
+    def move_messages(self, folder: str, messages: dict[str, list]) -> int:
         """Move the messages market for moving, by target folder.
 
         Args:
@@ -458,13 +487,13 @@ class ISH:
                     uids,
                     dest_folder,
                     flag_messages=True,
-                    flag_unseen=not interactive,
+                    flag_unseen=not self.interactive,
                 )
             moved += len(uids)
 
         return moved
 
-    def run(self, interactive: bool = False, train=True) -> int:
+    def run(self) -> int:
 
         settings = self.__settings
 
@@ -478,10 +507,20 @@ class ISH:
             if not self.connect():
                 return 1
 
-            if train:
+            if not os.path.isfile(self.model_file):
+                self.logger.info("No classifier at %s. Going to learning folders.")
+                self._train = True
+
+            if self.train:
                 self.learn_folders(settings.destination_folders)
 
-            self.classify_messages(settings.source_folders, interactive=interactive)
+            while not self._exit_event.is_set():
+                self.classify_messages(settings.source_folders)
+                if not self.daemon:
+                    break
+                new_var = 10
+                self._exit_event.wait(POLL_TIME_SEC)
+
         except Exception as e:
             base_logger.error("Something went wrong. Unknown error.")
             base_logger.info(e, stack_info=True)
@@ -502,6 +541,14 @@ class ISH:
     def __del__(self):
         self.close()
 
+    def __do_exit(self, signum, frame):
+        self.logger.debug("Got %s ", signal.strsignal(signum))
+        self.logger.info(
+            "Shutting down.",
+        )
+        self.close()
+        self._exit_event.set()
+
 
 def main(args: Dict[str, str]):
     ISH.debug = bool(args.pop("verbose"))
@@ -513,8 +560,8 @@ def main(args: Dict[str, str]):
     if config_path is not None and not config_path == "":
         os.environ["ISH_CONFIG_PATH"] = config_path
 
-    ish = ISH()
-    r = ish.run(interactive=interactive, train=train)
+    ish = ISH(interactive=interactive, train=train, daemon=daemonize)
+    r = ish.run()
     sys.exit(r)
 
 
@@ -551,10 +598,10 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--daemon",
-        "-d",
+        "-D",
         help="Run in daemon mode (NOT IMPLEMENTED)",
         action="store_true",
-        default=False,
+        default=bool(os.environ.get("ISH_DAEMON")),
     )
 
     parser.add_argument(
