@@ -13,6 +13,7 @@ Magically sort email into smart folders
 Status: Early development
 """
 
+from itertools import batched
 import logging
 import os
 import shelve
@@ -28,6 +29,7 @@ import numpy as np
 from openai import APIError, OpenAI, RateLimitError
 from openai.types import CreateEmbeddingResponse
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 
 from imap_helper import ImapHelper
@@ -39,7 +41,7 @@ base_logger = logging.getLogger("ish")
 
 embed_max_chars = 16384
 max_source_messages = 160
-max_learn_messages = 800
+max_learn_messages = 1600
 
 
 class ISH:
@@ -59,26 +61,26 @@ class ISH:
 
     @property
     def msgs_file(self) -> str:
-        return join(self.__settings["data_directory"], "msgs")
+        return join(self.__settings.data_directory, "msgs")
 
     @property
     def embd_file(self) -> str:
-        return join(self.__settings["data_directory"], "embd")
+        return join(self.__settings.data_directory, "embd")
 
     @property
     def model_file(self) -> str:
-        return join(self.__settings["data_directory"], "model.pkl")
+        return join(self.__settings.data_directory, "model.pkl")
 
     def __mesg_hash(self, mesg: str) -> str:
         return sha256(mesg["body"].encode("utf-8")).hexdigest()[:12]
 
     def __connect_openai(self) -> bool:
-        if not self.__settings["openai_api_key"]:
+        if not self.__settings.openai_api_key:
             return False
 
         # check if api key is valid
         try:
-            self.__client = OpenAI(api_key=self.__settings["openai_api_key"])
+            self.__client = OpenAI(api_key=self.__settings.openai_api_key)
         except APIError as e:
             self.logger.error(e)
             return False
@@ -101,7 +103,7 @@ class ISH:
 
         print("Configuration complete")
 
-    def connect_noninteractive(self) -> bool:
+    def connect(self) -> bool:
         """Connect to imap and openai without user interaction"""
         if not self.__imap_conn.connect_imap():
             self.logger.error(
@@ -128,20 +130,6 @@ class ISH:
             details["tries"],
         ),
     )
-    def __get_embedding(self, text: str) -> list:
-        """Get the embedding from OpenAI
-
-        Args:
-            text (str): the message text
-
-        Returns:
-            CreateEmbeddingResponse: the embeddings
-        """
-        e: CreateEmbeddingResponse = self.__client.embeddings.create(
-            input=[text], model=self.__settings["openai_model"]
-        )
-        return e.data[0].embedding
-
     def __get_embeddings(self, texts: list[str]) -> list:
         """Get the embedding from OpenAI
 
@@ -151,10 +139,19 @@ class ISH:
         Returns:
             CreateEmbeddingResponse: the embeddings
         """
-        e: CreateEmbeddingResponse = self.__client.embeddings.create(
-            input=texts, model=self.__settings["openai_model"]
-        )
-        return [emb_obj.embedding for emb_obj in e.data]
+        result = []
+        batched_list = list(batched(texts, 20))
+        index = 0
+        for batch in batched_list:
+            index += 1
+            self.logger.debug("\tBatch %i/%i", index, len(batched_list))
+            e: CreateEmbeddingResponse = self.__client.embeddings.create(
+                input=batch, model=self.__settings.openai_model
+            )
+            embeddings = [emb_obj.embedding for emb_obj in e.data]
+            result = result + embeddings
+
+        return result
 
     def get_msgs(self, folder: str, uids: List[int]) -> Dict[int, str]:
         """Fetch new messages through cache {uid: 'msg'}
@@ -271,6 +268,7 @@ class ISH:
                 for idx, uid in enumerate(msgs):
                     # dembd[uid] = self.__get_embedding(msg["body"][:embed_max_chars])
                     fe[f"{dhash[uid]}.embd"] = embeddings[idx]
+                    dembd[uid] = embeddings[idx]
                 t_1 = perf_counter()
                 self.logger.debug("Took %.2f to download embedings.", t_1 - t_0)
 
@@ -322,12 +320,17 @@ class ISH:
         self.logger.info("Accuracy: %.2f", accuracy)
         self.logger.info("Classifier: %s", self.classifier)
 
+        y_pred = clf.predict(X_test)
+        class_report = classification_report(y_test, y_pred, labels=folders)
+        self.logger.debug("Classification Report:")
+        self.logger.debug("\n%s", class_report)
+
         t2 = perf_counter()
 
-        self.logger.info("Trained classifier in %.2f seconds", t2 - t1)
+        self.logger.debug("Trained classifier in %.2f seconds", t2 - t1)
 
         joblib.dump(self.classifier, self.model_file)
-        self.logger.info("Saved classifier.")
+        self.logger.debug("Saved classifier.")
         return clf
 
     def classify_messages(self, source_folders: List[str], interactive=True) -> None:
@@ -406,7 +409,7 @@ class ISH:
                     )
                     self.skipped += 1
             self.logger.info("Finished predicting %s", folder)
-            self.moved += self.move_messages(folder, to_move)
+            self.moved += self.move_messages(folder, to_move, interactive=interactive)
         self.logger.info("Finished moved %i and skipped %i", self.moved, self.skipped)
 
     def __select_move(self, dest_folder: str) -> bool:
@@ -429,7 +432,9 @@ class ISH:
             else:
                 return False
 
-    def move_messages(self, folder: str, messages: dict[str, list]) -> int:
+    def move_messages(
+        self, folder: str, messages: dict[str, list], interactive: bool
+    ) -> int:
         """Move the messages market for moving, by target folder.
 
         Args:
@@ -445,36 +450,54 @@ class ISH:
             messages_list = messages[dest_folder]
             uids: list = [mess["uid"] for mess in messages_list]
             if len(uids) > 0:
-                imap_conn.move(folder, uids, dest_folder)
+                imap_conn.move(
+                    folder,
+                    uids,
+                    dest_folder,
+                    flag_messages=True,
+                    flag_unseen=not interactive,
+                )
             moved += len(uids)
 
         return moved
 
     def run(self, interactive: bool = False, train=True) -> int:
+
+        settings = self.__settings
+
+        for f in settings.source_folders:
+            self.logger.debug("Source folder: %s", f)
+
+        for f in settings.destination_folders:
+            self.logger.debug("Destination folder: %s", f)
+
         try:
-            if interactive:
-                self.configure_and_connect()
-            else:
-                if not self.connect_noninteractive():
-                    return 1
-
-            settings = self.__settings
-
-            for f in settings["source_folders"]:
-                self.logger.debug("Source folder: %s", f)
-
-            for f in settings["destination_folders"]:
-                self.logger.debug("Destination folder: %s", f)
+            if not self.connect():
+                return 1
 
             if train:
-                self.learn_folders(settings["destination_folders"])
+                self.learn_folders(settings.destination_folders)
 
-            self.classify_messages(settings["source_folders"], interactive=interactive)
+            self.classify_messages(settings.source_folders, interactive=interactive)
         except Exception as e:
             base_logger.error("Something went wrong. Unknown error.")
-            base_logger.debug(e, stack_info=True)
-            raise e
+            base_logger.info(e, stack_info=True)
+            return -1
+        finally:
+            self.close()
         return 0
+
+    def close(self):
+        if self.__imap_conn is None:
+            self.__imap_conn.close()
+            self.__imap_conn = None
+
+        if self.__client is None:
+            self.__client.close()
+            self.__client = None
+
+    def __del__(self):
+        self.close()
 
 
 def main(args: Dict[str, str]):

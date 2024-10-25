@@ -64,6 +64,15 @@ class ImapHelper:
 
         return True
 
+    def __del__(self):
+        self.close()
+
+    def close(self):
+        if self.__imap_conn is None:
+            self.logger.debug("Cleaning up imap connection")
+            self.__imap_conn.logout()
+            self.__imap_conn = None
+
     def list_folders(self) -> list[str]:
         return [t[2] for t in self.__imap_conn.list_folders()]
 
@@ -87,7 +96,12 @@ class ImapHelper:
         return results
 
     def move(
-        self, folder: str, uids: list, dest_folder: str, flag_messages=True
+        self,
+        folder: str,
+        uids: list,
+        dest_folder: str,
+        flag_messages=True,
+        flag_unseen=True,
     ) -> int:
         """Move a message from one folder to another
 
@@ -111,9 +125,14 @@ class ImapHelper:
         self.__imap_conn.select_folder(folder)
         if flag_messages:
             self.__imap_conn.add_flags(uids, [imapclient.FLAGGED])
-            # imap_conn.remove_flags([uid], [imapclient.SEEN])
+        if flag_unseen:
+            # For some reason it seems like adding a flag also put a message as "SEEN"
+            # thus we need to make it "UNSEEN" again
+            self.__imap_conn.remove_flags(uids, [imapclient.SEEN])
+
+        # Move in imap is a combination of operations. Copy, delete and expunge.
         self.__imap_conn.copy(uids, dest_folder)
-        self.__imap_conn.add_flags(uids, imapclient.DELETED, silent=True)
+        self.__imap_conn.add_flags(uids, [imapclient.DELETED], silent=True)
         self.__imap_conn.uid_expunge(uids)
         self.logger.info(
             "REALLY moved from %s to %s: %i", folder, dest_folder, len(uids)
