@@ -13,12 +13,12 @@ Magically sort email into smart folders
 Status: Early development
 """
 
-from itertools import batched
 import logging
 import os
 import shelve
 import sys
 from hashlib import sha256
+from itertools import batched
 from os.path import join
 from time import perf_counter
 from typing import Dict, List
@@ -43,6 +43,9 @@ embed_max_chars = 16384
 max_source_messages = 160
 max_learn_messages = 1600
 
+
+def env_to_bool(key:str):
+    return os.environ.get(key) is not None
 
 class ISH:
     debug = False
@@ -502,8 +505,8 @@ class ISH:
 
 def main(args: Dict[str, str]):
     ISH.debug = bool(args.pop("verbose"))
-    dry_run = bool(args.pop("dry_run"))
-    daemonize = bool(args.pop("daemon"))
+    dry_run = bool(args.pop("dry_run"))  # noqa: F841
+    daemonize = bool(args.pop("daemon"))  # noqa: F841
     interactive = bool(args.pop("interactive"))
     train = bool(args.pop("learn_folders"))
     config_path = args.pop("config_path")
@@ -527,7 +530,7 @@ if __name__ == "__main__":
         "-l",
         help="Learn based on the contents of the destination folders",
         action="store_true",
-        default=(os.environ.get("ISH_LEARN_FOLDERS")),
+        default=env_to_bool("ISH_LEARN_FOLDERS"),
     )
 
     parser.add_argument(
@@ -535,7 +538,7 @@ if __name__ == "__main__":
         "-i",
         help="Prompt user before moving anything",
         action="store_true",
-        default=bool(os.environ.get("ISH_INTERACTIVE")),
+        default=env_to_bool("ISH_INTERACTIVE"),
     )
 
     parser.add_argument(
@@ -543,7 +546,7 @@ if __name__ == "__main__":
         "-n",
         help="Don't actually move emails",
         action="store_true",
-        default=bool(os.environ.get("ISH_DRY_RUN")),
+        default=env_to_bool("ISH_DRY_RUN"),
     )
 
     parser.add_argument(
@@ -566,6 +569,6 @@ if __name__ == "__main__":
         "-v",
         help="Verbose/debug mode",
         action="store_true",
-        default=bool(os.environ.get("ISH_VERBOSE")),
+        default=env_to_bool("ISH_DEBUG"),
     )
     main(vars(parser.parse_args()))

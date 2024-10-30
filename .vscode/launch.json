@@ -13,8 +13,9 @@
       "program": "${workspaceFolder}/ish.py",
       "console": "integratedTerminal",
       "justMyCode": false, 
-      "args": ["-l", "-v"], 
+      "args": ["-l"], 
       //"env":{"ISH_CONFIG_PATH": "${workspaceFolder}/.ish"}
+      "env": {"ISH_DEBUG": ""}
     },
     {
       "name": "ISH",
