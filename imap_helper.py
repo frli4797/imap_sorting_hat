@@ -1,11 +1,15 @@
 import email
-import imaplib
 import logging
 import re
+import ssl
 import string
 
+import backoff
 import bs4
 import imapclient
+from imapclient.exceptions import IMAPClientError, LoginError
+
+from settings import Settings
 
 re_header_item = re.compile(r"(\w+): (.*)")
 re_address = re.compile(r"([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)")
@@ -43,42 +47,67 @@ def mesg_to_text(mesg: email.message.Message) -> str:
 
 
 class ImapHelper:
-    def __init__(self, settings) -> None:
+    def __init__(self, settings: Settings) -> None:
         self.__settings = settings
         self.__imap_conn = None
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def connect_imap(self) -> bool:
-        if not self.__settings["host"] or not self.__settings["username"]:
+        if not self.__settings.imap_host or not self.__settings.username:
             return False
 
         try:
-            self.__imap_conn = imapclient.IMAPClient(self.__settings["host"], ssl=True)
+            self.__imap_conn = imapclient.IMAPClient(self.__settings.imap_host, ssl=True)
             self.__imap_conn.login(
-                self.__settings["username"], self.__settings["password"]
+                self.__settings.username, self.__settings.password
             )
-        except imaplib.IMAP4.error as e:
-            self.logger.error(e)
+        except LoginError as e:
+            self.logger.error("Could not login to %s", self.__settings.imap_host)
             return False
+        except Exception as e:
+            self.logger.error("Unknow error logging in to imap server %s", self.__settings.imap_host)
+            self.logger.error(e, exc_info=True)
+            return False
+
         self.logger.debug(self.__imap_conn.capabilities())
 
         return True
 
     def __del__(self):
         self.close()
+    
+    def __reconnect(self):
+        self.logger.warning("Error communicating with IMAP server. Reconnecting.")
+        self.connect_imap()
+
 
     def close(self):
-        if self.__imap_conn is None:
+        if self.__imap_conn is not None:
             self.logger.debug("Cleaning up imap connection")
             self.__imap_conn.logout()
             self.__imap_conn = None
 
+    @backoff.on_exception(
+    backoff.expo,
+    IOError, ssl.SSLError, IMAPClientError,
+    on_backoff=__reconnect,  max_tries=2
+    )
     def list_folders(self) -> list[str]:
         return [t[2] for t in self.__imap_conn.list_folders()]
 
+    @backoff.on_exception(
+    backoff.expo,
+    IOError, ssl.SSLError, IMAPClientError,
+    on_backoff=__reconnect,  max_tries=2
+    )
     def fetch(self, uids) -> dict:
         return self.__imap_conn.fetch(uids, [hkey, bkey])
 
+    @backoff.on_exception(
+    backoff.expo,
+    IOError, ssl.SSLError, IMAPClientError,
+    on_backoff=__reconnect,  max_tries=2
+    )
     def search(self, folder: str, search_args=None) -> list[int]:
         """Searches for messages in imap folder
 
@@ -95,6 +124,11 @@ class ImapHelper:
         results = self.__imap_conn.search(search_args)
         return results
 
+    @backoff.on_exception(
+    backoff.expo,
+    IOError, ssl.SSLError, IMAPClientError,
+    on_backoff=__reconnect,  max_tries=2
+    )
     def move(
         self,
         folder: str,
@@ -121,7 +155,6 @@ class ImapHelper:
                 dest_folder,
             )
             raise ValueError("Expected uids to be a list")
-
         self.__imap_conn.select_folder(folder)
         if flag_messages:
             self.__imap_conn.add_flags(uids, [imapclient.FLAGGED])
