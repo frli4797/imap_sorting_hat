@@ -1,25 +1,27 @@
 import email
 import logging
 import re
-import ssl
 import string
+from email.header import decode_header
+from imaplib import IMAP4
 from itertools import batched
+import time
 
 import backoff
 import bs4
 import imapclient
-from imapclient.exceptions import IMAPClientError, LoginError
+from imapclient.exceptions import LoginError, IMAPClientError
 
 from settings import Settings
 
-re_header_item = re.compile(r"(\w+): (.*)")
-re_address = re.compile(r"([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)")
-re_newline = re.compile(r"[\r\n]+")
-re_symbol_sequence = re.compile(r"(?<=\s)\W+(?=\s)")
-re_whitespace = re.compile(r"\s+")
+_RE_SYMBOL_SEQ = re.compile(r"(?<=\s)\W+(?=\s)")
+_RE_WHITESPACE = re.compile(r"\s+")
+_RE_COMBINE_CR = re.compile(r"\n+")
+_RE_NO_ARROWS = re.compile(r"^([>])+", re.MULTILINE)
+_BATCH_SIZE = 40
 
-hkey = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
-bkey = b"BODY[]"
+HEADER_KEY = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
+BODY_KEY = b"BODY[]"
 
 
 def html2text(html: str) -> str:
@@ -31,27 +33,53 @@ def html2text(html: str) -> str:
     return text
 
 
+def get_header(raw_header, key):
+    header_str = ""
+    email_headers = email.message_from_bytes(raw_header)
+    header = email_headers[key]
+    if header is None:
+        return header_str
+
+    for _header, c_set in decode_header(header):
+        if isinstance(_header, str):
+            header_str = f"{header_str} {_header}"
+        else:
+            try:
+                header_str = f"{header_str} {_header.decode(c_set or "utf-8")}"
+            except LookupError:
+                # Retry with utf-8, if we didn't find the codec.
+                header_str = f"{header_str} {_header.decode("utf-8")}"
+
+    return header_str.strip()
+
+
 def mesg_to_text(mesg: email.message.Message) -> str:
     """Convert an email message to plain-text"""
     text = ""
     for part in mesg.walk():
+        charset = part.get_content_charset() or "utf-8"
         if part.get_content_type() == "text/plain":
-            text += part.get_payload(decode=True).decode("utf-8", errors="ignore")
+            text += part.get_payload(decode=True).decode(charset, errors="ignore")
         elif part.get_content_type() == "text/html":
             text += html2text(
-                part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                part.get_payload(decode=True).decode(charset, errors="ignore")
             )
 
-    text = re_symbol_sequence.sub("", text)
-    text = re_whitespace.sub(" ", text)
+    text = _RE_SYMBOL_SEQ.sub("", text)
+    text = _RE_WHITESPACE.sub(" ", text)
+    text = _RE_COMBINE_CR.sub(" ", text)
+    text = _RE_NO_ARROWS.sub("", text)
     return text
 
 
-class ImapHelper:
+class ImapHandler:
     def __init__(self, settings: Settings) -> None:
         self.__settings = settings
         self.__imap_conn = None
         self.logger = logging.getLogger(self.__class__.__name__)
+
+    def get_connection(self):
+        return self.__imap_conn
 
     def connect_imap(self) -> bool:
         if not self.__settings.imap_host or not self.__settings.username:
@@ -87,27 +115,31 @@ class ImapHelper:
     def close(self):
         if self.__imap_conn is not None:
             self.logger.debug("Cleaning up imap connection")
-            self.__imap_conn.logout()
-            self.__imap_conn = None
+            try:
+                self.__imap_conn.logout()
+            except IMAP4.error as se:
+                self.logger.debug("Error logging out from imap.")
+            except Exception as e:
+                self.logger.debug("Other error %s", e)
+            finally:
+                self.__imap_conn = None
 
-    @backoff.on_exception(
-        backoff.expo,
-        [IOError, ssl.SSLError, IMAPClientError],
-        on_backoff=__reconnect,
-        max_tries=2,
-    )
     def list_folders(self) -> list[str]:
+        try:
+            return self.__list_folders()
+        except IMAPClientError as e:
+            self.logger.warning(
+                "Got exception on listing folders, will reconnect %s", e
+            )
+            self.__reconnect()
+            return self.__list_folders()
+
+    def __list_folders(self) -> list[str]:
         return [t[2] for t in self.__imap_conn.list_folders()]
 
-    @backoff.on_exception(
-        backoff.expo,
-        [IOError, ssl.SSLError, IMAPClientError],
-        on_backoff=__reconnect,
-        max_tries=2,
-    )
-    def fetch(self, uids) -> dict:
-        """ Will fetch a set of email based on the list of uids. Any list extending 
-            a certain size will be batched. 
+    def fetch(self, uids: list) -> dict:
+        """Will fetch a set of email based on the list of uids. Any list extending
+            a certain size will be batched.
 
         Args:
             uids (list): a list of uids for emails to be feteched
@@ -115,20 +147,38 @@ class ImapHelper:
         Returns:
             dict: All fetched emails
         """
-        all_mails = {}
-        batched_uids = list(batched(uids, 20))
+        try:
+            return self.__fetch(uids)
+        except IMAPClientError as e:
+            self.logger.warning("Got exception on fetching, will reconnect %s", e)
+            self.__reconnect()
+            return self.__fetch(uids)
 
+    def __fetch(self, uids) -> dict:
+        all_mails = {}
+        batched_uids = list(batched(uids, _BATCH_SIZE))
+        index = 0
         for uid_batch in batched_uids:
-            all_mails.update(self.__imap_conn.fetch(uid_batch, [hkey, bkey]))
+            index += 1
+            self.logger.info("\t Batch %i/%i", index, len(batched_uids))
+            time.sleep(1)
+            all_mails.update(self.__fetch_batch(uid_batch))
 
         return all_mails
 
     @backoff.on_exception(
         backoff.expo,
-        [IOError, ssl.SSLError, IMAPClientError],
-        on_backoff=__reconnect,
-        max_tries=2,
+        (IOError, IMAP4.error, IMAPClientError),
+        max_tries=4,
+        on_backoff=lambda self, details: self.logger.warning(
+            "Backing off %0.1f seconds after %i tries",
+            details["wait"],
+            details["tries"],
+        ),
     )
+    def __fetch_batch(self, uid_batch: list):
+        return self.__imap_conn.fetch(uid_batch, [HEADER_KEY, BODY_KEY])
+
     def search(self, folder: str, search_args=None) -> list[int]:
         """Searches for messages in imap folder
 
@@ -139,6 +189,14 @@ class ImapHelper:
         Returns:
             list: list of uids
         """
+        try:
+            return self.__search(folder, search_args)
+        except IMAPClientError as e:
+            self.logger.warning("Got exception on searching, will reconnect %s", e)
+            self.__reconnect()
+            return self.__search(folder, search_args)
+
+    def __search(self, folder: str, search_args=None) -> list[int]:
         if search_args is None:
             search_args = ["ALL"]
         self.__imap_conn.select_folder(folder)
@@ -147,8 +205,7 @@ class ImapHelper:
 
     @backoff.on_exception(
         backoff.expo,
-        [IOError, ssl.SSLError, IMAPClientError],
-        on_backoff=__reconnect,
+        (IOError, IMAP4.error, IMAPClientError),
         max_tries=2,
     )
     def move(
@@ -203,42 +260,20 @@ class ImapHelper:
         Returns:
             dict: the message as a string
         """
-        header = mesg[hkey].decode("utf-8")
-        raw_body = mesg[bkey]
+        raw_header = mesg[HEADER_KEY]
+        raw_body = mesg[BODY_KEY]
         payload = email.message_from_bytes(raw_body)
         body_text = mesg_to_text(payload)
-        header_lines = re_newline.split(header)
 
-        header_dict = {}
-        for item in header_lines:
-            m = re_header_item.match(item)
-            if m:
-                header_dict[m.group(1)] = m.group(2)
-
-        # remove spam prefix because we want spam training data to be as similar as possible
-        # to non-spam training data
-        header_dict["Subject"] = (
-            header_dict.get("Subject", "").removeprefix("**SPAM**").strip()
-        )
-
-        from_addr = []
-        to_addr = []
-
-        try:
-            from_addr = [m.group(1) for m in re_address.finditer(header_dict["FROM"])]
-            to_addr = [
-                m.group(1)
-                for m in re_address.finditer(
-                    header_dict["TO"] + header_dict.get("CC", "")
-                )
-            ]
-        except KeyError:
-            self.logger.warning("Did not find a TO or CC in the headers.")
+        to_addr = get_header(raw_header, "TO")
+        to_addr += get_header(raw_header, "CC")
+        from_addr = get_header(raw_header, "FROM")
+        subject = get_header(raw_header, "SUBJECT").removeprefix("**SPAM**").strip()
 
         mesg_dict = {
             "from": from_addr,
             "tocc": to_addr,
-            "body": f'Subject: {header_dict["Subject"]}. {body_text}',
+            "body": f"Subject: {subject}. {body_text}",
         }
 
         return mesg_dict
