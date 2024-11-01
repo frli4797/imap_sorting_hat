@@ -576,7 +576,10 @@ if __name__ == "__main__":
     import argparse
 
     userhomedir = Settings.get_user_directory()
-    parser = argparse.ArgumentParser(description="Lorem ipsum")
+    parser = argparse.ArgumentParser(
+        description="""Magically sort email into smart folders.
+                                     **ish** works by downloading plain text versions of all the emails in the source email folders and move those unread to the destination folders, by using a multi class classifier."""
+    )
     # Environment variables always takes precedence.
     parser.add_argument(
         "--learn-folders",
