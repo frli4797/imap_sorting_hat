@@ -34,7 +34,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 
-from imap_helper import ImapHelper
+from imap import ImapHandler
 from settings import Settings
 
 logging.basicConfig(
@@ -70,7 +70,7 @@ class ISH:
             self.logger.setLevel(logging.DEBUG)
         self.__settings = Settings(ISH.debug)
         self.__client: OpenAI = None
-        self.__imap_conn: ImapHelper = ImapHelper(self.__settings)
+        self.__imap_conn: ImapHandler = ImapHandler(self.__settings)
 
         self._interactive = interactive
         self._train = train
@@ -378,7 +378,7 @@ class ISH:
         Args:
             source_folders (List[str]): list of source folders
         """
-        imap_conn: ImapHelper = self.__imap_conn
+        imap_conn: ImapHandler = self.__imap_conn
 
         self.skipped = 0
         self.moved = 0
@@ -509,30 +509,30 @@ class ISH:
         for f in settings.destination_folders:
             self.logger.debug("Destination folder: %s", f)
 
-        try:
-            if not self.connect():
-                return 1
+        #       try:
+        if not self.connect():
+            return 1
 
-            if not os.path.isfile(self.model_file):
-                self.logger.info("No classifier at %s. Going to learning folders.")
-                self._train = True
+        if not os.path.isfile(self.model_file):
+            self.logger.info("No classifier at %s. Going to learning folders.")
+            self._train = True
 
-            if self.train:
-                self.learn_folders(settings.destination_folders)
+        if self.train:
+            self.learn_folders(settings.destination_folders)
 
-            while not self._exit_event.is_set():
-                self.classify_messages(settings.source_folders)
-                if not self.daemon:
-                    break
-                new_var = 10
-                self._exit_event.wait(POLL_TIME_SEC)
+        while not self._exit_event.is_set():
+            self.classify_messages(settings.source_folders)
+            if not self.daemon:
+                break
+            new_var = 10
+            self._exit_event.wait(POLL_TIME_SEC)
 
-        except Exception as e:
-            base_logger.error("Something went wrong. Unknown error.")
-            base_logger.info(e, stack_info=True)
-            return -1
-        finally:
-            self.close()
+        #       except Exception as e:
+        #           base_logger.error("Something went wrong. Unknown error.")
+        #           base_logger.info(e, stack_info=True)
+        #           return -1
+        #       finally:
+        #           self.close()
         return 0
 
     def close(self):

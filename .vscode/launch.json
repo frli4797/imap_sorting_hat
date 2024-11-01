@@ -4,7 +4,13 @@
   // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
   "version": "0.2.0",
   "configurations": [
-
+    {
+      "name": "Python Debugger: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal"
+    },
 
     {
       "name": "ISH learn",
@@ -12,9 +18,12 @@
       "request": "launch",
       "program": "${workspaceFolder}/ish.py",
       "console": "integratedTerminal",
-      "justMyCode": false, 
-      "args": ["-l"], 
-      "env":{"ISH_CONFIG_PATH": "${workspaceFolder}/.ish", "ISH_DEBUG": "True"},
+      "justMyCode": false,
+      "args": ["-l"],
+      "env": {
+        "ISH_CONFIG_PATH": "${workspaceFolder}/.ish",
+        "ISH_DEBUG": "True"
+      }
     },
     {
       "name": "ISH",
@@ -22,8 +31,8 @@
       "request": "launch",
       "program": "${workspaceFolder}/ish.py",
       "console": "integratedTerminal",
-      "justMyCode": false, 
-      "args": ["-v"], 
+      "justMyCode": false,
+      "args": ["-v"]
       //"env":{"ISH_CONFIG_PATH": "dummy"}
     },
     {
