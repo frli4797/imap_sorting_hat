@@ -3,6 +3,7 @@ import logging
 import re
 import ssl
 import string
+from itertools import batched
 
 import backoff
 import bs4
@@ -79,8 +80,9 @@ class ImapHelper:
         self.close()
 
     def __reconnect(self):
-        self.logger.warning("Error communicating with IMAP server. Reconnecting.")
-        self.connect_imap()
+        if self.__imap_conn is not None:
+            self.logger.warning("Error communicating with IMAP server. Reconnecting.")
+            self.connect_imap()
 
     def close(self):
         if self.__imap_conn is not None:
@@ -104,7 +106,22 @@ class ImapHelper:
         max_tries=2,
     )
     def fetch(self, uids) -> dict:
-        return self.__imap_conn.fetch(uids, [hkey, bkey])
+        """ Will fetch a set of email based on the list of uids. Any list extending 
+            a certain size will be batched. 
+
+        Args:
+            uids (list): a list of uids for emails to be feteched
+
+        Returns:
+            dict: All fetched emails
+        """
+        all_mails = {}
+        batched_uids = list(batched(uids, 20))
+
+        for uid_batch in batched_uids:
+            all_mails.update(self.__imap_conn.fetch(uid_batch, [hkey, bkey]))
+
+        return all_mails
 
     @backoff.on_exception(
         backoff.expo,
