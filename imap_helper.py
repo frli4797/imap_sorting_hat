@@ -58,15 +58,17 @@ class ImapHelper:
             return False
 
         try:
-            self.__imap_conn = imapclient.IMAPClient(self.__settings.imap_host, ssl=True)
-            self.__imap_conn.login(
-                self.__settings.username, self.__settings.password
+            self.__imap_conn = imapclient.IMAPClient(
+                self.__settings.imap_host, ssl=True
             )
+            self.__imap_conn.login(self.__settings.username, self.__settings.password)
         except LoginError as e:
             self.logger.error("Could not login to %s", self.__settings.imap_host)
             return False
         except Exception as e:
-            self.logger.error("Unknow error logging in to imap server %s", self.__settings.imap_host)
+            self.logger.error(
+                "Unknow error logging in to imap server %s", self.__settings.imap_host
+            )
             self.logger.error(e, exc_info=True)
             return False
 
@@ -76,12 +78,11 @@ class ImapHelper:
 
     def __del__(self):
         self.close()
-    
+
     def __reconnect(self):
         if self.__imap_conn is not None:
             self.logger.warning("Error communicating with IMAP server. Reconnecting.")
             self.connect_imap()
-
 
     def close(self):
         if self.__imap_conn is not None:
@@ -90,17 +91,19 @@ class ImapHelper:
             self.__imap_conn = None
 
     @backoff.on_exception(
-    backoff.expo,
-    IOError, ssl.SSLError, IMAPClientError,
-    on_backoff=__reconnect,  max_tries=2
+        backoff.expo,
+        [IOError, ssl.SSLError, IMAPClientError],
+        on_backoff=__reconnect,
+        max_tries=2,
     )
     def list_folders(self) -> list[str]:
         return [t[2] for t in self.__imap_conn.list_folders()]
 
     @backoff.on_exception(
-    backoff.expo,
-    IOError, ssl.SSLError, IMAPClientError,
-    on_backoff=__reconnect,  max_tries=2
+        backoff.expo,
+        [IOError, ssl.SSLError, IMAPClientError],
+        on_backoff=__reconnect,
+        max_tries=2,
     )
     def fetch(self, uids) -> dict:
         """ Will fetch a set of email based on the list of uids. Any list extending 
@@ -121,9 +124,10 @@ class ImapHelper:
         return all_mails
 
     @backoff.on_exception(
-    backoff.expo,
-    IOError, ssl.SSLError, IMAPClientError,
-    on_backoff=__reconnect,  max_tries=2
+        backoff.expo,
+        [IOError, ssl.SSLError, IMAPClientError],
+        on_backoff=__reconnect,
+        max_tries=2,
     )
     def search(self, folder: str, search_args=None) -> list[int]:
         """Searches for messages in imap folder
@@ -142,9 +146,10 @@ class ImapHelper:
         return results
 
     @backoff.on_exception(
-    backoff.expo,
-    IOError, ssl.SSLError, IMAPClientError,
-    on_backoff=__reconnect,  max_tries=2
+        backoff.expo,
+        [IOError, ssl.SSLError, IMAPClientError],
+        on_backoff=__reconnect,
+        max_tries=2,
     )
     def move(
         self,

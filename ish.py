@@ -37,7 +37,9 @@ from sklearn.model_selection import train_test_split
 from imap_helper import ImapHelper
 from settings import Settings
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(module)s %(message)s"
+)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 base_logger = logging.getLogger("ish")
 
@@ -47,8 +49,9 @@ max_learn_messages = 1600
 POLL_TIME_SEC = 120
 
 
-def env_to_bool(key:str):
+def env_to_bool(key: str):
     return os.environ.get(key) is not None
+
 
 class ISH:
     debug = False
@@ -135,7 +138,7 @@ class ISH:
         folders = self.__imap_conn.list_folders()
         settings.update_folder_settings(folders)
 
-        print("Configuration complete")
+        self.logger.info("Connect and configuration complete")
 
     def connect(self) -> bool:
         """Connect to imap and openai without user interaction"""
@@ -408,12 +411,15 @@ class ISH:
                     "body": mesgs[uid]["body"][0:100],
                 }
                 if top_probability > 0.25:
-                    print(
-                        f'\n{uid:3} From {mess_to_move["from"]}: {mess_to_move["body"]}'
+                    self.logger.info(
+                        "\n%3i From %s: %s",
+                        uid,
+                        mess_to_move["from"],
+                        mess_to_move["body"],
                     )
 
                     for p, c in ranks[:3]:
-                        print(f"{p:.2f}: {c}")
+                        self.logger.info("%.2f: %s", p, c)
 
                     if self.interactive and not self.__select_move(dest_folder):
                         self.logger.debug(
