@@ -13,6 +13,7 @@ Magically sort email into smart folders
 Status: Early development
 """
 
+from enum import Enum
 import logging
 import os
 import shelve
@@ -53,6 +54,9 @@ def env_to_bool(key: str):
     return os.environ.get(key) is not None
 
 
+Action = Enum("Action", ["YES", "NO", "QUIT"])
+
+
 class ISH:
     debug = False
     _exit_event = Event()
@@ -62,7 +66,11 @@ class ISH:
     _daemon = False
 
     def __init__(
-        self, interactive: bool = False, train: bool = False, daemon: bool = False
+        self,
+        interactive: bool = False,
+        train: bool = False,
+        daemon: bool = False,
+        dry_run=False,
     ) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -75,6 +83,7 @@ class ISH:
         self._interactive = interactive
         self._train = train
         self._daemon = daemon
+        self._dry_run = dry_run
 
         self.classifier: RandomForestClassifier = None
         self.moved = 0
@@ -379,7 +388,6 @@ class ISH:
             source_folders (List[str]): list of source folders
         """
         imap_conn: ImapHandler = self.__imap_conn
-
         self.skipped = 0
         self.moved = 0
         classifier = self.classifier
@@ -411,27 +419,15 @@ class ISH:
                     "body": mesgs[uid]["body"][0:100],
                 }
                 if top_probability > 0.25:
-                    self.logger.info(
-                        "\n%3i From %s: %s",
-                        uid,
-                        mess_to_move["from"],
-                        mess_to_move["body"],
-                    )
+                    self._log_move(uid, "Going to move", ranks, mess_to_move)
 
-                    for p, c in ranks[:3]:
-                        self.logger.info("%.2f: %s", p, c)
-
-                    if self.interactive and not self.__select_move(dest_folder):
-                        self.logger.debug(
-                            """Skipping due to probability %.2f
-                                %i From %s: %s""",
-                            top_probability,
-                            uid,
-                            mess_to_move["from"],
-                            mess_to_move["body"],
-                        )
-                        self.skipped += 1
-                        continue
+                    if self.interactive:
+                        answer = self.__select_move(dest_folder)
+                        if answer == Action.NO:
+                            self.skipped += 1
+                            continue
+                        elif answer == Action.QUIT:
+                            break
 
                     if dest_folder not in to_move:
                         to_move[dest_folder] = [mess_to_move]
@@ -439,20 +435,28 @@ class ISH:
                         to_move[dest_folder].append(mess_to_move)
 
                 else:
-                    self.logger.debug(
-                        """Skipping due to probability %.2f
-                                %i From %s: %s""",
-                        top_probability,
-                        uid,
-                        mess_to_move["from"],
-                        mess_to_move["body"],
+                    self._log_move(
+                        uid, "Skipping due to probability", ranks, mess_to_move
                     )
                     self.skipped += 1
+
             self.logger.info("Finished predicting %s", folder)
             self.moved += self.move_messages(folder, to_move)
         self.logger.info("Finished moved %i and skipped %i", self.moved, self.skipped)
 
-    def __select_move(self, dest_folder: str) -> bool:
+    def _log_move(self, uid, text, ranks, mess_to_move):
+        self.logger.info(
+            "%s\n%3i From %s: %s",
+            text,
+            uid,
+            mess_to_move["from"],
+            mess_to_move["body"],
+        )
+
+        for p, c in ranks[:3]:
+            self.logger.info("%.2f: %s", p, c)
+
+    def __select_move(self, dest_folder: str) -> Action:
         """Interactively ask user if to move.
 
         Args:
@@ -465,12 +469,11 @@ class ISH:
         while opt not in ["y", "n", "q"]:
             opt = input(f"Move message to {dest_folder}? [y]yes, [n]no, [q]quit:")
             if opt == "y":
-                return True
+                return Action.YES
             if opt == "q":
                 self.logger.info("Quitting.")
-                sys.exit(0)
-            else:
-                return False
+                return Action.QUIT
+        return Action.NO
 
     def move_messages(self, folder: str, messages: dict[str, list]) -> int:
         """Move the messages market for moving, by target folder.
@@ -487,16 +490,23 @@ class ISH:
         for dest_folder in messages:
             messages_list = messages[dest_folder]
             uids: list = [mess["uid"] for mess in messages_list]
-            if len(uids) > 0:
-                imap_conn.move(
-                    folder,
+            if not self._dry_run:
+                if len(uids) > 0:
+                    imap_conn.move(
+                        folder,
+                        uids,
+                        dest_folder,
+                        flag_messages=True,
+                        flag_unseen=not self.interactive,
+                    )
+                moved += len(uids)
+            else:
+                self.logger.info(
+                    "Dry run. WOULD have moved UID %s from %s to %s",
                     uids,
+                    folder,
                     dest_folder,
-                    flag_messages=True,
-                    flag_unseen=not self.interactive,
                 )
-            moved += len(uids)
-
         return moved
 
     def run(self) -> int:
@@ -527,12 +537,6 @@ class ISH:
             new_var = 10
             self._exit_event.wait(POLL_TIME_SEC)
 
-        #       except Exception as e:
-        #           base_logger.error("Something went wrong. Unknown error.")
-        #           base_logger.info(e, stack_info=True)
-        #           return -1
-        #       finally:
-        #           self.close()
         return 0
 
     def close(self):
@@ -559,14 +563,14 @@ class ISH:
 def main(args: Dict[str, str]):
     ISH.debug = bool(args.pop("verbose"))
     dry_run = bool(args.pop("dry_run"))  # noqa: F841
-    daemonize = bool(args.pop("daemon"))  # noqa: F841
+    daemonize = bool(args.pop("daemon"))
     interactive = bool(args.pop("interactive"))
     train = bool(args.pop("learn_folders"))
     config_path = args.pop("config_path")
     if config_path is not None and not config_path == "":
         os.environ["ISH_CONFIG_PATH"] = config_path
 
-    ish = ISH(interactive=interactive, train=train, daemon=daemonize)
+    ish = ISH(interactive=interactive, train=train, daemon=daemonize, dry_run=dry_run)
     r = ish.run()
     sys.exit(r)
 
@@ -578,7 +582,9 @@ if __name__ == "__main__":
     userhomedir = Settings.get_user_directory()
     parser = argparse.ArgumentParser(
         description="""Magically sort email into smart folders.
-                                     **ish** works by downloading plain text versions of all the emails in the source email folders and move those unread to the destination folders, by using a multi class classifier."""
+                            **ish** works by downloading plain text versions of all the \
+                            emails in the source email folders and move those unread to \
+                            the destination folders, by using a multi class classifier."""
     )
     # Environment variables always takes precedence.
     parser.add_argument(
@@ -608,9 +614,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--daemon",
         "-D",
-        help="Run in daemon mode (NOT IMPLEMENTED)",
+        help="Run in daemon/polling mode",
         action="store_true",
-        default=bool(os.environ.get("ISH_DAEMON")),
+        default=env_to_bool("ISH_DAEMON"),
     )
 
     parser.add_argument(
