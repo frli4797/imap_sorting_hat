@@ -73,10 +73,11 @@ def mesg_to_text(mesg: email.message.Message) -> str:
 
 
 class ImapHandler:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, readonly=False) -> None:
         self.__settings = settings
         self.__imap_conn = None
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.__readonly = readonly
 
     def get_connection(self):
         return self.__imap_conn
@@ -199,7 +200,7 @@ class ImapHandler:
     def __search(self, folder: str, search_args=None) -> list[int]:
         if search_args is None:
             search_args = ["ALL"]
-        self.__imap_conn.select_folder(folder)
+        self.__imap_conn.select_folder(folder, self.__readonly)
         results = self.__imap_conn.search(search_args)
         return results
 
@@ -234,7 +235,7 @@ class ImapHandler:
                 dest_folder,
             )
             raise ValueError("Expected uids to be a list")
-        self.__imap_conn.select_folder(folder)
+        self.__imap_conn.select_folder(folder, self.__readonly)
         if flag_messages:
             self.__imap_conn.add_flags(uids, [imapclient.FLAGGED])
         if flag_unseen:
