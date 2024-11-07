@@ -1,12 +1,12 @@
 # imap_sorting_hat = "ish"
 
-Magically sort email into smart folders. **ish** works by downloading plain text versions of all the emails in the source email folders and move those unread to the destination folders, by using a multi class classifier. 
+Magically sort email into smart folders. **ish** works by downloading plain text versions of all the emails in the source email folders and move those unread to the destination folders, by using a multi class classifier.
 
 Initially the classifier needs to be trained on what your emails look like and where you like to keep them. This is done by downloading all emails (as plain text) from your destination folders, caching those locally. That cache, essentially a write through cache is used to aquire text embeddings from OpenAI for all the emails seen. Also the embeddings will be cached on disk. The embeddings will constitute the data to train a RandomForest on, and all the destination folders will be used as the classes for the classifier.
 
 The model, after trained, will the get stored as well, and then used whenever a new email message has been discovered, assuming that **ish** is being run in non-interactive and polling mode. Once a new email (unseen/unread) message is discovered **ish** will classify that message and then move it according to its prior experience (training).
 
-**ish** can also be run in interactive mode. It will then try to move **all** messages from the source folder(s), but ask the user about every message. This can be a good option when first training the model, and also to ensure that you don't end up with email in random folders in a cold start situation. 
+**ish** can also be run in interactive mode. It will then try to move **all** messages from the source folder(s), but ask the user about every message. This can be a good option when first training the model, and also to ensure that you don't end up with email in random folders in a cold start situation.
 
 - No rule programming. Instead, just move a few emails into a smart folder and **ish** will quickly learn what the messages have in common.
 - Any folder can be labeled a smart folder.
@@ -57,7 +57,7 @@ openai_model: text-embedding-3-small
 ### Command line
 
 Run the **ish** by issuing
-`python3 ish.py` 
+`python3 ish.py`
 The main program has a few parameters that can be used.
 
 ```text
@@ -94,6 +94,6 @@ I leave no guarantees that this will work with your mailprovider, nor that it wi
 
 ## Other
 
-I made some experiments with other embedding models using Ollama. Unfortunately the precision really suffered in these experimiments, especially with a mailbox with messages on multiple languages. 
+I made some experiments with other embedding models using Ollama. Unfortunately the precision really suffered in these experimiments, especially with a mailbox with messages on multiple languages.
 
 Thanks to: [@kenseehart](https://github.com/kenseehart)
