@@ -497,7 +497,7 @@ class ISH:
                         folder,
                         uids,
                         dest_folder,
-                        flag_messages=True,
+                        flag_messages=self.interactive,
                         flag_unseen=not self.interactive,
                     )
                 moved += len(uids)
