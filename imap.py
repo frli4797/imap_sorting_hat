@@ -2,15 +2,15 @@ import email
 import logging
 import re
 import string
+import time
 from email.header import decode_header
 from imaplib import IMAP4
 from itertools import batched
-import time
 
 import backoff
 import bs4
 import imapclient
-from imapclient.exceptions import LoginError, IMAPClientError
+from imapclient.exceptions import IMAPClientError, LoginError
 
 from settings import Settings
 
@@ -224,6 +224,7 @@ class ImapHandler:
             uids (list): message uids
             dest_folder (str): destination folder
             flag_messages (bool, optional): Whether to flag messages moved. Defaults to True.
+            flag_unseen (bool, optional): Make moved messages unread.
         Returns:
             int: number of messages moved
         """

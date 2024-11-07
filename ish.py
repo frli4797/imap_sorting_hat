@@ -13,12 +13,12 @@ Magically sort email into smart folders
 Status: Early development
 """
 
-from enum import Enum
 import logging
 import os
 import shelve
 import signal
 import sys
+from enum import Enum
 from hashlib import sha256
 from itertools import batched
 from os.path import join
@@ -496,7 +496,7 @@ class ISH:
                         folder,
                         uids,
                         dest_folder,
-                        flag_messages=True,
+                        flag_messages=self.interactive,
                         flag_unseen=not self.interactive,
                     )
                 moved += len(uids)
