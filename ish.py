@@ -13,17 +13,18 @@ Magically sort email into smart folders
 Status: Early development
 """
 
-from enum import Enum
 import logging
 import os
 import shelve
 import signal
 import sys
+from datetime import datetime, timedelta
+from enum import Enum
 from hashlib import sha256
 from itertools import batched
 from os.path import join
 from threading import Event
-from time import perf_counter
+from time import perf_counter, time
 from typing import Dict, List
 
 import backoff
@@ -345,7 +346,7 @@ class ISH:
             embed_array.extend(embd.values())
             folder_array.extend([folder] * len(embd))
             if self._exit_event.is_set():
-                return
+                return None
 
         t1 = perf_counter()
         self.logger.info(
@@ -512,6 +513,7 @@ class ISH:
     def run(self) -> int:
 
         settings = self.__settings
+        next_training = time()
 
         for f in settings.source_folders:
             self.logger.debug("Source folder: %s", f)
@@ -519,7 +521,6 @@ class ISH:
         for f in settings.destination_folders:
             self.logger.debug("Destination folder: %s", f)
 
-        #       try:
         if not self.connect():
             return 1
 
@@ -527,14 +528,14 @@ class ISH:
             self.logger.info("No classifier at %s. Going to learning folders.")
             self._train = True
 
-        if self.train:
-            self.learn_folders(settings.destination_folders)
-
         while not self._exit_event.is_set():
+            if self.train and time() >= next_training:
+                next_training: datetime = time() + timedelta(hours=24).total_seconds()
+                self.learn_folders(settings.destination_folders)
+
             self.classify_messages(settings.source_folders)
             if not self.daemon:
                 break
-            new_var = 10
             self._exit_event.wait(POLL_TIME_SEC)
 
         return 0

@@ -22,7 +22,8 @@
       "args": ["-l"],
       "env": {
         "ISH_CONFIG_PATH": "${workspaceFolder}/.ish",
-        "ISH_DEBUG": "True"
+        "ISH_DEBUG": "True",
+        "ISH_DAEMON": "True"
       }
     },
     {
