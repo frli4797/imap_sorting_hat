@@ -78,6 +78,17 @@ class ImapHandler:
         self.__imap_conn = None
         self.logger = logging.getLogger(self.__class__.__name__)
         self.__readonly = readonly
+        self.__capabilities = None
+
+    @property
+    def capabilities(self) -> list:
+        return self.__capabilities
+
+    @property
+    def has_move(self) -> bool:
+        if self.__capabilities is None:
+            return False
+        return "MOVE" in self.__capabilities
 
     def get_connection(self):
         return self.__imap_conn
@@ -100,8 +111,8 @@ class ImapHandler:
             )
             self.logger.error(e, exc_info=True)
             return False
-
-        self.logger.debug(self.__imap_conn.capabilities())
+        self.__capabilities = [x.decode() for x in self.__imap_conn.capabilities()]
+        self.logger.debug(self.__capabilities)
 
         return True
 
@@ -245,9 +256,13 @@ class ImapHandler:
             self.__imap_conn.remove_flags(uids, [imapclient.SEEN])
 
         # Move in imap is a combination of operations. Copy, delete and expunge.
-        self.__imap_conn.copy(uids, dest_folder)
-        self.__imap_conn.add_flags(uids, [imapclient.DELETED], silent=True)
-        self.__imap_conn.uid_expunge(uids)
+        # Unless the move capability exists.
+        if self.has_move:
+            self.__imap_conn.move(uids, dest_folder)
+        else:
+            self.__imap_conn.copy(uids, dest_folder)
+            self.__imap_conn.add_flags(uids, [imapclient.DELETED], silent=True)
+            self.__imap_conn.uid_expunge(uids)
         self.logger.info(
             "REALLY moved from %s to %s: %i", folder, dest_folder, len(uids)
         )
