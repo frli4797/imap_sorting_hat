@@ -1,11 +1,14 @@
 import email
 import logging
 import re
+import signal
 import string
 import time
+from datetime import timedelta
 from email.header import decode_header
 from imaplib import IMAP4
 from itertools import batched
+from threading import Event
 
 import backoff
 import bs4
@@ -19,6 +22,7 @@ _RE_WHITESPACE = re.compile(r"\s+")
 _RE_COMBINE_CR = re.compile(r"\n+")
 _RE_NO_ARROWS = re.compile(r"^([>])+", re.MULTILINE)
 _BATCH_SIZE = 40
+_KEEP_ALIVE_MINUTES = 10
 
 HEADER_KEY = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
 BODY_KEY = b"BODY[]"
@@ -73,11 +77,18 @@ def mesg_to_text(mesg: email.message.Message) -> str:
 
 
 class ImapHandler:
+    __exit_event = Event()
+
     def __init__(self, settings: Settings, readonly=False) -> None:
         self.__settings = settings
         self.__imap_conn = None
         self.logger = logging.getLogger(self.__class__.__name__)
         self.__readonly = readonly
+        self.__exit_event = Event()
+
+        # signal.signal(signal.SIGHUP, self.__do_reload)
+        signal.signal(signal.SIGINT, self.__do_exit)
+        signal.signal(signal.SIGTERM, self.__do_exit)
 
     def get_connection(self):
         return self.__imap_conn
@@ -104,6 +115,14 @@ class ImapHandler:
         self.logger.debug(self.__imap_conn.capabilities())
 
         return True
+
+    def __do_exit(self, signum, frame):
+        self.logger.debug("Got %s ", signal.strsignal(signum))
+        self.logger.info(
+            "Shutting down.",
+        )
+        self.close()
+        self.__exit_event.set()
 
     def __del__(self):
         self.close()
@@ -154,6 +173,39 @@ class ImapHandler:
             self.logger.warning("Got exception on fetching, will reconnect %s", e)
             self.__reconnect()
             return self.__fetch(uids)
+
+    def idle_wait(self):
+        imap_client = self.__imap_conn
+        keep_alive_due = time.time()
+        test = self.__exit_event.is_set()
+        responses = None
+        while not (responses or self.__exit_event.is_set() or test):
+
+            # Refresh/keep alive every x minutes
+            if time.time() >= keep_alive_due:
+                try:
+                    imap_client.noop()
+                    imap_client.idle()
+                except IMAP4.error as ie:
+                    self.logger.warning(
+                        "Got error setting idle. Trying to recover Error %s.", ie
+                    )
+                    if "GNNE34" not in str(ie):
+                        raise
+                self.logger.info("Connection is now in IDLE mode.")
+                keep_alive_due = (
+                    time.time() + timedelta(minutes=_KEEP_ALIVE_MINUTES).total_seconds()
+                )
+
+            responses = imap_client.idle_check(timeout=10)
+
+            if responses:
+                self.logger.debug(
+                    "Server sent: %s", responses if responses else "nothing"
+                )
+
+        imap_client.idle_done()
+        return responses
 
     def __fetch(self, uids) -> dict:
         all_mails = {}
