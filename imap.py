@@ -268,7 +268,7 @@ class ImapHandler:
         )
         return len(uids)
 
-    def parse_mesg(self, mesg: dict) -> dict:
+    def parse_mesg(self, p_mesg: dict) -> dict:
         """Parse a raw message into a string
 
         Args:
@@ -277,6 +277,10 @@ class ImapHandler:
         Returns:
             dict: the message as a string
         """
+        # Some IMAP dialects respond with the keys containing double quotes and some not.
+        # Let's strip the quotes
+        mesg = {k.replace(b'"', b""): v for k, v in p_mesg.items()}
+
         raw_header = mesg[HEADER_KEY]
         raw_body = mesg[BODY_KEY]
         payload = email.message_from_bytes(raw_body)
