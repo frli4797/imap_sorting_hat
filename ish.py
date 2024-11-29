@@ -45,7 +45,7 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 base_logger = logging.getLogger("ish")
 
-embed_max_chars = 16384
+embed_max_chars = 8192
 max_source_messages = 160
 max_learn_messages = 1600
 POLL_TIME_SEC = 120
