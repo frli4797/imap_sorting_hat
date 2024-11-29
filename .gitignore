@@ -3,3 +3,5 @@
 scrap.py
 /__*
 .ish/*
+*.db
+
