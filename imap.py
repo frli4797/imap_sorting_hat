@@ -23,6 +23,8 @@ _BATCH_SIZE = 40
 HEADER_KEY = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
 BODY_KEY = b"BODY[]"
 
+base_logger = logging.getLogger("imap")
+
 
 def html2text(html: str) -> str:
     """Convert html to plain-text using beautifulsoup"""
@@ -93,6 +95,16 @@ class ImapHandler:
     def get_connection(self):
         return self.__imap_conn
 
+    @backoff.on_exception(
+        backoff.expo,
+        (IOError, IMAP4.error, IMAPClientError),
+        max_tries=5,
+        on_backoff=lambda details: base_logger.warning(
+            "Backing off %0.1f seconds on %i logging in to IMAP",
+            details["wait"],
+            details["tries"],
+        ),
+    )
     def connect_imap(self) -> bool:
         if not self.__settings.imap_host or not self.__settings.username:
             return False
@@ -136,6 +148,16 @@ class ImapHandler:
             finally:
                 self.__imap_conn = None
 
+    @backoff.on_exception(
+        backoff.expo,
+        (IOError, IMAP4.error, IMAPClientError),
+        max_tries=5,
+        on_backoff=lambda details: base_logger.warning(
+            "Backing off %0.1f seconds on %i listing folders with IMAP",
+            details["wait"],
+            details["tries"],
+        ),
+    )
     def list_folders(self) -> list[str]:
         try:
             return self.__list_folders()
@@ -191,6 +213,16 @@ class ImapHandler:
     def __fetch_batch(self, uid_batch: list):
         return self.__imap_conn.fetch(uid_batch, [HEADER_KEY, BODY_KEY])
 
+    @backoff.on_exception(
+        backoff.expo,
+        (IOError, IMAP4.error, IMAPClientError),
+        max_tries=5,
+        on_backoff=lambda details: base_logger.warning(
+            "Backing off %0.1f seconds on %i searching IMAP",
+            details["wait"],
+            details["tries"],
+        ),
+    )
     def search(self, folder: str, search_args=None) -> list[int]:
         """Searches for messages in imap folder
 
