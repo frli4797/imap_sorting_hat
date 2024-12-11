@@ -30,7 +30,7 @@ from typing import Dict, List
 import backoff
 import joblib
 import numpy as np
-from openai import APIError, OpenAI, RateLimitError
+from openai import APIError, BadRequestError, OpenAI, RateLimitError
 from openai.types import CreateEmbeddingResponse
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
@@ -192,9 +192,14 @@ class ISH:
         for batch in batched_list:
             index += 1
             self.logger.debug("\tBatch %i/%i", index, len(batched_list))
-            e: CreateEmbeddingResponse = self.__client.embeddings.create(
-                input=batch, model=self.__settings.openai_model
-            )
+            try:
+                e: CreateEmbeddingResponse = self.__client.embeddings.create(
+                    input=batch, model=self.__settings.openai_model
+                )
+            except BadRequestError as bre:
+                self.logger.error("Can't send request to openai %s", bre)
+                raise
+
             embeddings = [emb_obj.embedding for emb_obj in e.data]
             result = result + embeddings
 
@@ -213,7 +218,9 @@ class ISH:
         d = {}
         new_uids = []
         imap_conn = self.__imap_conn
-        self.logger.info("Getting %i messages from %s", len(uids), folder)
+        if len(uids) > 0:
+            self.logger.info("Getting %i messages from %s", len(uids), folder)
+
         with shelve.open(self.msgs_file, writeback=False) as fm:
             # Check if the message/folder combination is in the cache.
             for uid in uids:
@@ -235,7 +242,7 @@ class ISH:
                     fm[f"{msg_hash}.mesg"] = mesg
                     d[uid] = mesg
                 self.logger.debug("Found %i messages to cache", len(new_uids))
-        self.logger.info("Total messages found/added %i in %s.", len(d), folder)
+        self.logger.debug("Total messages found/added %i in %s.", len(d), folder)
         return d
 
     def get_embeddings(self, folder: str, uids: List[int]) -> Dict[int, np.ndarray]:
@@ -250,7 +257,8 @@ class ISH:
         """
         dhash = {}
         dembd = {}
-        self.logger.info("Getting %i embeddings from %s", len(uids), folder)
+        if len(uids) > 0:
+            self.logger.info("Getting %i embeddings from %s", len(uids), folder)
 
         with shelve.open(self.msgs_file, writeback=False) as fm:
             new_uids = []  # uids that need a new hash
@@ -319,7 +327,7 @@ class ISH:
                 t_1 = perf_counter()
                 self.logger.debug("Took %.2f to download embedings.", t_1 - t_0)
 
-        self.logger.info("Total embeddings found/added %i in %s.", len(dembd), folder)
+        self.logger.debug("Total embeddings found/added %i in %s.", len(dembd), folder)
         return dembd
 
     def learn_folders(self, folders: List[str]) -> RandomForestClassifier:
@@ -349,7 +357,7 @@ class ISH:
                 return None
 
         t1 = perf_counter()
-        self.logger.info(
+        self.logger.debug(
             "Fetched %i embeddings in %.2f seconds", len(embed_array), t1 - t0
         )
 
@@ -441,12 +449,14 @@ class ISH:
                     )
                     self.skipped += 1
 
-            self.logger.info("Finished predicting %s", folder)
             self.moved += self.move_messages(folder, to_move)
-        self.logger.info("Finished moved %i and skipped %i", self.moved, self.skipped)
+        if (self.moved + self.skipped) > 0:
+            self.logger.info(
+                "Finished moved %i and skipped %i", self.moved, self.skipped
+            )
 
     def _log_move(self, uid, text, ranks, mess_to_move):
-        self.logger.info(
+        self.logger.debug(
             "%s\n%3i From %s: %s",
             text,
             uid,
@@ -455,7 +465,7 @@ class ISH:
         )
 
         for p, c in ranks[:3]:
-            self.logger.info("%.2f: %s", p, c)
+            self.logger.debug("%.2f: %s", p, c)
 
     def __select_move(self, dest_folder: str) -> Action:
         """Interactively ask user if to move.
@@ -502,7 +512,7 @@ class ISH:
                     )
                 moved += len(uids)
             else:
-                self.logger.info(
+                self.logger.debug(
                     "Dry run. WOULD have moved UID %s from %s to %s",
                     uids,
                     folder,

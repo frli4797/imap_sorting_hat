@@ -194,7 +194,7 @@ class ImapHandler:
         index = 0
         for uid_batch in batched_uids:
             index += 1
-            self.logger.info("\t Batch %i/%i", index, len(batched_uids))
+            self.logger.debug("\t Batch %i/%i", index, len(batched_uids))
             time.sleep(1)
             all_mails.update(self.__fetch_batch(uid_batch))
 
@@ -295,9 +295,7 @@ class ImapHandler:
             self.__imap_conn.copy(uids, dest_folder)
             self.__imap_conn.add_flags(uids, [imapclient.DELETED], silent=True)
             self.__imap_conn.uid_expunge(uids)
-        self.logger.info(
-            "REALLY moved from %s to %s: %i", folder, dest_folder, len(uids)
-        )
+        self.logger.info("Moved from %s to %s: %i", folder, dest_folder, len(uids))
         return len(uids)
 
     def parse_mesg(self, p_mesg: dict) -> dict:
