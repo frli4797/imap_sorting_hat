@@ -1,6 +1,7 @@
 import shelve
 from os.path import join
-from ish import Settings
+
+from ish.ish import Settings
 
 settings = Settings()
 

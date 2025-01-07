@@ -6,5 +6,8 @@
     "python.analysis.inlayHints.variableTypes": true,
     "python.analysis.inlayHints.pytestParameters": false,
     "python.analysis.enablePytestSupport": false,
-    "editor.formatOnSave": true
+    "editor.formatOnSave": true,
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter"
+    }
 }

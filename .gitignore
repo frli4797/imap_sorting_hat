@@ -1,5 +1,5 @@
 /.venv
 /test.py
 scrap.py
-/__*
+*__pycache__*
 .ish/*
