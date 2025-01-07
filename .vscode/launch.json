@@ -16,12 +16,12 @@
       "name": "ISH learn",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/ish.py",
+      "program": "${workspaceFolder}/ish/ish.py",
       "console": "integratedTerminal",
       "justMyCode": false,
       "args": ["-l"],
       "env": {
-        "ISH_CONFIG_PATH": "${workspaceFolder}/.ish",
+        // "ISH_CONFIG_PATH": "${workspaceFolder}/.ish",
         "ISH_DEBUG": "True",
         "ISH_DAEMON": "True"
       }
@@ -30,7 +30,7 @@
       "name": "ISH",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/ish.py",
+      "program": "${workspaceFolder}/ish/ish.py",
       "console": "integratedTerminal",
       "justMyCode": false,
       "args": ["-v"]

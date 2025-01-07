@@ -1,7 +1,7 @@
 /.venv
 /test.py
 scrap.py
-/__*
+*__pycache*
 .ish/*
 *.db
 

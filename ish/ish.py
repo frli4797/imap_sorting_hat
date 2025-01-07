@@ -30,14 +30,14 @@ from typing import Dict, List
 import backoff
 import joblib
 import numpy as np
+from emailservice import EmailFeatureService
+from imap import ImapHandler
 from openai import APIError, OpenAI, RateLimitError
 from openai.types import CreateEmbeddingResponse
+from settings import Settings
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
-
-from imap import ImapHandler
-from settings import Settings
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(module)s %(message)s"
@@ -62,9 +62,9 @@ class ISH:
     debug = False
     _exit_event = Event()
 
-    _interactive = False
-    _train = False
-    _daemon = False
+    __interactive = False
+    __train = False
+    __daemon = False
 
     def __init__(
         self,
@@ -81,10 +81,12 @@ class ISH:
         self.__client: OpenAI = None
         self.__imap_conn: ImapHandler = ImapHandler(self.__settings)
 
-        self._interactive = interactive
-        self._train = train
-        self._daemon = daemon
-        self._dry_run = dry_run
+        self.__interactive = interactive
+        self.__train = train
+        self.__daemon = daemon
+        self.__dry_run = dry_run
+
+        self.emailservice = None
 
         self.classifier: RandomForestClassifier = None
         self.moved = 0
@@ -108,15 +110,15 @@ class ISH:
 
     @property
     def train(self) -> bool:
-        return self._train
+        return self.__train
 
     @property
     def daemon(self) -> bool:
-        return self._daemon
+        return self.__daemon
 
     @property
     def interactive(self) -> bool:
-        return self._interactive
+        return self.__interactive
 
     def __mesg_hash(self, mesg: str) -> str:
         return sha256(mesg["body"].encode("utf-8")).hexdigest()[:12]
@@ -166,6 +168,14 @@ class ISH:
             )
             return False
 
+        self.emailservice = EmailFeatureService(
+            settings=self.__settings,
+            openai_client=self.__connect_openai,
+            imap_handler=self.__imap_conn,
+            dry_run=self.__dry_run,
+            interactive=self.__interactive,
+        )
+
         return True
 
     @backoff.on_exception(
@@ -200,7 +210,7 @@ class ISH:
 
         return result
 
-    def get_msgs(self, folder: str, uids: List[int]) -> Dict[int, str]:
+    def x_get_msgs(self, folder: str, uids: List[int]) -> Dict[int, str]:
         """Fetch new messages through cache {uid: 'msg'}
 
         Args:
@@ -238,7 +248,7 @@ class ISH:
         self.logger.info("Total messages found/added %i in %s.", len(d), folder)
         return d
 
-    def get_embeddings(self, folder: str, uids: List[int]) -> Dict[int, np.ndarray]:
+    def x_get_embeddings(self, folder: str, uids: List[int]) -> Dict[int, np.ndarray]:
         """Get embeddings using OpenAI API through cache {uid: embedding}
 
         Args:
@@ -342,7 +352,7 @@ class ISH:
             self.logger.info("Learning folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
             uids = imap_conn.search(folder, ["ALL"])
-            embd = self.get_embeddings(folder, uids[:max_learn_messages])
+            embd = self.emailservice.get_embeddings(folder, uids[:max_learn_messages])
             embed_array.extend(embd.values())
             folder_array.extend([folder] * len(embd))
             if self._exit_event.is_set():
@@ -404,8 +414,8 @@ class ISH:
             else:
                 uids = imap_conn.search(folder, ["ALL"])
 
-            embd = self.get_embeddings(folder, uids[:max_source_messages])
-            mesgs = self.get_msgs(folder, uids[:max_source_messages])
+            embd = self.emailservice.get_embeddings(folder, uids[:max_source_messages])
+            mesgs = self.emailservice.get_msgs(folder, uids[:max_source_messages])
 
             to_move: dict[str, list] = {}
             for uid, embd in embd.items():
@@ -491,7 +501,7 @@ class ISH:
         for dest_folder in messages:
             messages_list = messages[dest_folder]
             uids: list = [mess["uid"] for mess in messages_list]
-            if not self._dry_run:
+            if not self.__dry_run:
                 if len(uids) > 0:
                     imap_conn.move(
                         folder,
@@ -526,7 +536,7 @@ class ISH:
 
         if not os.path.isfile(self.model_file):
             self.logger.info("No classifier at %s. Going to learning folders.")
-            self._train = True
+            self.__train = True
 
         while not self._exit_event.is_set():
             if self.train and time() >= next_training:
