@@ -19,7 +19,7 @@ _RE_COMBINE_CR = re.compile(r"\n+")
 _RE_NO_ARROWS = re.compile(r"^([>])+", re.MULTILINE)
 _BATCH_SIZE = 40
 
-HEADER_KEY = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
+HEADER_KEY = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC MESSAGE-ID)]"
 BODY_KEY = b"BODY[]"
 
 base_logger = logging.getLogger("imap")
@@ -315,6 +315,7 @@ class ImapHandler:
         payload = email.message_from_bytes(raw_body)
         body_text = mesg_to_text(payload)
 
+        message_id = get_header(raw_header, "MESSAGE-ID")
         to_addr = get_header(raw_header, "TO")
         to_addr += get_header(raw_header, "CC")
         from_addr = get_header(raw_header, "FROM")

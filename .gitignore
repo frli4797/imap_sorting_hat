@@ -3,3 +3,4 @@
 scrap.py
 *__pycache__*
 .ish/*
+*.db

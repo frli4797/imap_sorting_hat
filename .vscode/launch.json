@@ -16,7 +16,7 @@
       "name": "ISH learn",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/ish/ish.py",
+      "program": "${workspaceFolder}/src/ish.py",
       "console": "integratedTerminal",
       "justMyCode": false,
       "args": ["-l"],
@@ -30,7 +30,7 @@
       "name": "ISH",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/ish/ish.py",
+      "program": "${workspaceFolder}/src/ish.py",
       "console": "integratedTerminal",
       "justMyCode": false,
       "args": ["-v"]
