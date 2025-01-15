@@ -3,7 +3,6 @@ import shelve
 from hashlib import sha256
 from itertools import batched
 from os.path import join
-from time import perf_counter
 from typing import Dict, List
 
 import backoff
@@ -85,6 +84,31 @@ class EmailFeatureService:
         return d
 
     def get_embeddings_new(self, folder, uids: List[int]) -> Dict[int, np.ndarray]:
+        all_emails_dict = self.get_emails(folder, uids)
+
+        # Ensure there are embeddings for all content.
+        emails_no_emb = [
+            email_ for email_ in all_emails_dict.values() if not email_.hasVector()
+        ]
+        self.__add_embeddings_for_email(emails_no_emb)
+
+        self.logger.debug("Done")
+
+        result_dict = {
+            mess.uid: np.asarray(mess.emdeddings) for mess in all_emails_dict.values()
+        }
+        return result_dict
+
+    def get_emails_w_embeddings(self, folder: str, uids: List[int]) -> Dict[int, Email]:
+        all_emails_dict = self.get_emails(folder, uids)
+        # Ensure there are embeddings for all content.
+        emails_no_emb = [
+            email_ for email_ in all_emails_dict.values() if not email_.hasVector()
+        ]
+        self.__add_embeddings_for_email(emails_no_emb)
+        return all_emails_dict
+
+    def get_emails(self, folder, uids) -> Dict[int, Email]:
         store = self.__messagestore
         imap_conn = self.__imap_conn
 
@@ -97,7 +121,6 @@ class EmailFeatureService:
         not_in_cache = []
         self.logger.debug("Found %s messages not in cache", len(uids))
         if len(uids) > 0:
-
             # Fetch all the new messages not in the cache
             msgs = imap_conn.fetch(uids)
             for uid in uids:
@@ -121,104 +144,7 @@ class EmailFeatureService:
             mess_cached = store.get_messages_by_uids(folder=folder, uids=uids)
             self.logger.debug("Found %i messages in cache", len(mess_cached))
             all_emails_dict = {mess.uid: mess for mess in mess_cached}
-
-        # Ensure there are embeddings for all content.
-        emails_no_emb = [
-            email_ for email_ in all_emails_dict.values() if not email_.hasVector()
-        ]
-        self.__add_embeddings_for_email(emails_no_emb)
-
-        self.logger.debug("Done")
-
-        result_dict = {
-            mess.uid: np.asarray(mess.emdeddings) for mess in all_emails_dict.values()
-        }
-        return result_dict
-
-    def get_embeddings(self, folder: str, uids: List[int]) -> Dict[int, np.ndarray]:
-        """Get embeddings using OpenAI API through cache {uid: embedding}
-
-        Args:
-            folder (str): the source folder
-            uids (List[int]): uids to get embeddings for
-
-        Returns:
-            Dict[int, np.ndarray]: embeddings by uid
-        """
-        self.get_embeddings_new(folder=folder, uids=uids)
-        dhash = {}
-        dembd = {}
-        self.logger.info("Getting %i embeddings from %s", len(uids), folder)
-
-        with shelve.open(self.msgs_file, writeback=False) as fm:
-            new_uids = []  # uids that need a new hash
-            # Check which folder/messages that are not in the cache.
-            for uid in uids:
-                if f"{folder}:{uid}" in fm:
-                    dhash[uid] = fm[f"{folder}:{uid}"]
-                else:
-                    new_uids.append(uid)
-                    continue
-
-            self.logger.debug(
-                "Found %i out of %i needing hash", len(new_uids), len(uids)
-            )
-            dmesg = self.get_msgs(folder, new_uids)
-
-            self.logger.debug("Adding hashes for %i messages", len(dmesg))
-            # Saving hashes for unseen messages.
-            for uid, mesg in dmesg.items():
-                msg_hash = self.__mesg_hash(mesg)
-                dhash[uid] = msg_hash
-                fm[f"{folder}:{uid}"] = msg_hash
-            self.logger.debug("Added hashes for messages.")
-            fm.close()
-
-            new_uids = []  # uids that need a new embedding
-            self.logger.debug("Finding embedding for %s messages", len(uids))
-        with shelve.open(self.embd_file, writeback=False) as fe:
-            for uid, msg_hash in dhash.items():  # dhash is {uid: hash}
-                if f"{msg_hash}.embd" in fe:
-                    embd = fe[f"{msg_hash}.embd"]
-                    dembd[uid] = embd
-                    continue
-                else:
-                    new_uids.append(uid)
-
-            if len(new_uids) > 0:
-                self.logger.debug("Found %i embeddings not in cache", len(new_uids))
-                msgs = self.get_msgs(folder, new_uids)
-
-                t_batch_0 = perf_counter()
-                embeddings = self.__get_embeddings(
-                    list(msg["body"][:embed_max_chars] for msg in msgs.values())
-                )
-                t_batch_1 = perf_counter()
-                if len(embeddings) == len(msgs.keys()):
-                    self.logger.debug(
-                        "Took %.2f to BATCH %i embedings.",
-                        t_batch_1 - t_batch_0,
-                        len(embeddings),
-                    )
-                else:
-                    self.logger.error(
-                        "Embeddings list is not same length as messages list"
-                    )
-                    raise IndexError(
-                        "Embeddings list is not same length as messages list"
-                    )
-                self.logger.debug("Storing embeddings for %i messages", len(dmesg))
-
-                t_0 = perf_counter()
-                for idx, uid in enumerate(msgs):
-                    # dembd[uid] = self.__get_embedding(msg["body"][:embed_max_chars])
-                    fe[f"{dhash[uid]}.embd"] = embeddings[idx]
-                    dembd[uid] = embeddings[idx]
-                t_1 = perf_counter()
-                self.logger.debug("Took %.2f to download embedings.", t_1 - t_0)
-
-        self.logger.info("Total embeddings found/added %i in %s.", len(dembd), folder)
-        return dembd
+        return all_emails_dict
 
     def move_messages(self, folder: str, messages: dict[str, list]) -> int:
         """Move the messages market for moving, by target folder.
@@ -230,6 +156,8 @@ class EmailFeatureService:
         Returns:
             int: number of messages moved
         """
+
+        # TODO: also change the folder in feature database.
         imap_conn = self.__imap_conn
         moved = 0
         for dest_folder in messages:
@@ -253,38 +181,6 @@ class EmailFeatureService:
                     dest_folder,
                 )
         return moved
-
-    @backoff.on_exception(
-        backoff.expo,
-        RateLimitError,
-        on_backoff=lambda details: base_logger.warning(
-            "Backing off %0.1f seconds after %i tries",
-            details["wait"],
-            details["tries"],
-        ),
-    )
-    def __get_embeddings(self, texts: list[str]) -> list:
-        """Get the embedding from OpenAI
-
-        Args:
-            text (str): the message text
-
-        Returns:
-            CreateEmbeddingResponse: the embeddings
-        """
-        result = []
-        batched_list = list(batched(texts, 20))
-        index = 0
-        for batch in batched_list:
-            index += 1
-            self.logger.debug("\tBatch %i/%i", index, len(batched_list))
-            e: CreateEmbeddingResponse = self.__client.embeddings.create(
-                input=batch, model=self.__settings.openai_model
-            )
-            embeddings = [emb_obj.embedding for emb_obj in e.data]
-            result = result + embeddings
-
-        return result
 
     @backoff.on_exception(
         backoff.expo,

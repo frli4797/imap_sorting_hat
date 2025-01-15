@@ -44,7 +44,7 @@ base_logger = logging.getLogger("ish")
 embed_max_chars = 8192
 max_source_messages = 160
 max_learn_messages = 1600
-POLL_TIME_SEC = 120
+POLL_TIME_SEC = 20
 
 
 def env_to_bool(key: str):
@@ -245,22 +245,22 @@ class ISH:
             else:
                 uids = imap_conn.search(folder, ["ALL"])
 
-            embd = self.__emailservice.get_embeddings_new(
+            mesgs = self.__emailservice.get_emails_w_embeddings(
                 folder, uids[:max_source_messages]
             )
-            mesgs = self.__emailservice.get_msgs(folder, uids[:max_source_messages])
 
             to_move: dict[str, list] = {}
-            for uid, embd in embd.items():
-                dest_folder = classifier.predict([embd])[0]
-                proba = classifier.predict_proba([embd])[0]
+            for uid, mesg in mesgs.items():
+                emb = np.asarray(mesg.emdeddings)
+                dest_folder = classifier.predict([emb])[0]
+                proba = classifier.predict_proba([emb])[0]
                 ranks = sorted(zip(proba, classifier.classes_), reverse=True)
                 (top_probability, predcited_class) = ranks[0]
                 mess_to_move = {
                     "uid": uid,
                     "probability": top_probability,
-                    "from": mesgs[uid]["from"][0],
-                    "body": mesgs[uid]["body"][0:100],
+                    "from": mesg.from_,
+                    "body": mesg.body[0:100],
                 }
                 if top_probability > 0.25:
                     self._log_move(uid, "Going to move", ranks, mess_to_move)
