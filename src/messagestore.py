@@ -1,6 +1,8 @@
+import datetime
 from os.path import join
 
-from sqlalchemy import and_, create_engine, delete, insert, update
+from sqlalchemy import and_, create_engine, delete, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
 
 from model import Base, Email
@@ -24,6 +26,23 @@ class MessageStore:
         session = self.Session()
         try:
             session.add(message)
+            session.commit()
+            session.refresh(message)
+            return message
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def insert_message(self, message: Email):
+        session = self.Session()
+        try:
+            insert_stmt = insert(Email).values(vars(message))
+            on_conflict_stmt = insert_stmt.on_conflict_do_nothing(
+                index_elements=["message_id"]
+            )
+            session.execute(on_conflict_stmt)
             session.commit()
             session.refresh(message)
             return message
@@ -77,7 +96,7 @@ class MessageStore:
     def update_message(self, message: Email):
         """Update the content of a message by its ID."""
         session = self.Session()
-
+        message.timestamp = datetime.datetime.now()
         try:
             session.execute(
                 update(Email),
@@ -90,19 +109,42 @@ class MessageStore:
         finally:
             session.close()
 
+    def update_messages(self, messages: list[Email]):
+        session = self.Session()
+        new_data = []
+
+        for message in messages:
+            message.hash = message.mesg_hash()
+            new_data.append(vars(message))
+
+        try:
+            res = session.execute(
+                update(Email),
+                new_data,
+            )
+            session.commit()
+            return res
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
     def add_messages(self, messages: list[Email]):
         session = self.Session()
         new_data = []
 
         for message in messages:
+            message.hash = message.mesg_hash()
             new_data.append(vars(message))
 
         try:
-            session.execute(
+            res = session.execute(
                 insert(Email),
                 new_data,
             )
             session.commit()
+            return res
         except Exception as e:
             session.rollback()
             raise e

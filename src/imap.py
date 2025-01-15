@@ -11,6 +11,7 @@ import backoff
 import bs4
 import imapclient
 from imapclient.exceptions import IMAPClientError, LoginError
+
 from settings import Settings
 
 _RE_SYMBOL_SEQ = re.compile(r"(?<=\s)\W+(?=\s)")
@@ -325,6 +326,8 @@ class ImapHandler:
             "from": from_addr,
             "tocc": to_addr,
             "body": f"Subject: {subject}. {body_text}",
+            "message-id": message_id,
+            "subject": subject,
         }
 
         return mesg_dict

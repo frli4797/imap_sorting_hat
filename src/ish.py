@@ -26,13 +26,14 @@ from typing import Dict, List
 
 import joblib
 import numpy as np
-from emailservice import EmailFeatureService
-from imap import ImapHandler
 from openai import APIError, OpenAI
-from settings import Settings
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
+
+from emailservice import EmailFeatureService
+from imap import ImapHandler
+from settings import Settings
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(module)s %(message)s"
@@ -180,7 +181,9 @@ class ISH:
             self.logger.info("Learning folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
             uids = imap_conn.search(folder, ["ALL"])
-            embd = self.__emailservice.get_embeddings(folder, uids[:max_learn_messages])
+            embd = self.__emailservice.get_embeddings_new(
+                folder, uids[:max_learn_messages]
+            )
             embed_array.extend(embd.values())
             folder_array.extend([folder] * len(embd))
             if self._exit_event.is_set():
@@ -242,7 +245,7 @@ class ISH:
             else:
                 uids = imap_conn.search(folder, ["ALL"])
 
-            embd = self.__emailservice.get_embeddings(
+            embd = self.__emailservice.get_embeddings_new(
                 folder, uids[:max_source_messages]
             )
             mesgs = self.__emailservice.get_msgs(folder, uids[:max_source_messages])

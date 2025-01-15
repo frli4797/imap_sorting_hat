@@ -19,7 +19,7 @@ class Email(Base):
     # Columns
     from_ = Column(String(255))
     to = Column(String(255), nullable=False)
-    message_id = Column(String(255), index=True)
+    message_id = Column(String(255), index=True, nullable=False, unique=True)
     timestamp = Column(DateTime, default=datetime.datetime.now, nullable=False)
     hash = Column(String(64), nullable=False, index=True)
     subject = Column(String(256))
@@ -32,11 +32,19 @@ class Email(Base):
 
     @property
     def emdeddings(self) -> list:
+        if self.vector_json is None or len(self.vector_json) < 1:
+            return []
         return list(json.loads(self.vector_json))
 
     @emdeddings.setter
     def emdeddings(self, values: list):
         self.vector_json = json.dumps(values)
+
+    def hasVector(self):
+        if self.vector_json is None or len(self.vector_json) < 1:
+            return False
+        else:
+            return len(list(json.loads(self.vector_json))) > 0
 
     def equals(self, mesg) -> bool:
         if mesg.message_id == self.message_id:

@@ -11,6 +11,9 @@ import numpy as np
 from openai import OpenAI, RateLimitError
 from openai.types import CreateEmbeddingResponse
 
+from messagestore import MessageStore
+from model import Email
+
 base_logger = logging.getLogger("emailservice")
 
 embed_max_chars = 8192
@@ -29,6 +32,7 @@ class EmailFeatureService:
         self.__dry_run = dry_run
         self.__imap_conn = imap_handler
         self.__client: OpenAI = openai_client
+        self.__messagestore = MessageStore(settings, None)
 
     @property
     def msgs_file(self) -> str:
@@ -80,6 +84,57 @@ class EmailFeatureService:
         self.logger.info("Total messages found/added %i in %s.", len(d), folder)
         return d
 
+    def get_embeddings_new(self, folder, uids: List[int]) -> Dict[int, np.ndarray]:
+        store = self.__messagestore
+        imap_conn = self.__imap_conn
+
+        mess_cached = store.get_messages_by_uids(folder=folder, uids=uids)
+        self.logger.debug("Found %i messages in cache", len(mess_cached))
+
+        all_emails_dict = {mess.uid: mess for mess in mess_cached}
+        uids[:] = [uid for uid in uids if uid not in all_emails_dict.keys()]
+
+        not_in_cache = []
+        self.logger.debug("Found %s messages not in cache", len(uids))
+        if len(uids) > 0:
+
+            # Fetch all the new messages not in the cache
+            msgs = imap_conn.fetch(uids)
+            for uid in uids:
+                mesg = self.__imap_conn.parse_mesg(msgs[uid])
+                email = Email(
+                    body=mesg["body"],
+                    folder=folder,
+                    uid=uid,
+                    from_=mesg["from"],
+                    to=mesg["tocc"],
+                    subject=mesg["subject"],
+                    message_id=mesg["message-id"],
+                )
+
+                not_in_cache.append(email)
+                all_emails_dict[uid] = email
+
+        if len(not_in_cache) > 0:
+            store.add_messages(not_in_cache)
+            # Re-read from cache.
+            mess_cached = store.get_messages_by_uids(folder=folder, uids=uids)
+            self.logger.debug("Found %i messages in cache", len(mess_cached))
+            all_emails_dict = {mess.uid: mess for mess in mess_cached}
+
+        # Ensure there are embeddings for all content.
+        emails_no_emb = [
+            email_ for email_ in all_emails_dict.values() if not email_.hasVector()
+        ]
+        self.__add_embeddings_for_email(emails_no_emb)
+
+        self.logger.debug("Done")
+
+        result_dict = {
+            mess.uid: np.asarray(mess.emdeddings) for mess in all_emails_dict.values()
+        }
+        return result_dict
+
     def get_embeddings(self, folder: str, uids: List[int]) -> Dict[int, np.ndarray]:
         """Get embeddings using OpenAI API through cache {uid: embedding}
 
@@ -90,6 +145,7 @@ class EmailFeatureService:
         Returns:
             Dict[int, np.ndarray]: embeddings by uid
         """
+        self.get_embeddings_new(folder=folder, uids=uids)
         dhash = {}
         dembd = {}
         self.logger.info("Getting %i embeddings from %s", len(uids), folder)
@@ -227,6 +283,46 @@ class EmailFeatureService:
             )
             embeddings = [emb_obj.embedding for emb_obj in e.data]
             result = result + embeddings
+
+        return result
+
+    @backoff.on_exception(
+        backoff.expo,
+        RateLimitError,
+        on_backoff=lambda details: base_logger.warning(
+            "Backing off %0.1f seconds after %i tries",
+            details["wait"],
+            details["tries"],
+        ),
+    )
+    def __add_embeddings_for_email(self, emails: list[Email]) -> list:
+        """Get the embedding from OpenAI
+
+        Args:
+            text (str): the message text
+
+        Returns:
+            CreateEmbeddingResponse: the embeddings
+        """
+        if len(emails) < 1:
+            return emails
+
+        result = []
+        batched_list = list(batched(emails, 20))
+        index = 0
+        for email_batch in batched_list:
+            index += 1
+            batch = [email.body[:embed_max_chars] for email in email_batch]
+            self.logger.debug("\tBatch %i/%i", index, len(batched_list))
+            e: CreateEmbeddingResponse = self.__client.embeddings.create(
+                input=batch, model=self.__settings.openai_model
+            )
+            i = 0
+            for email in email_batch:
+                email.emdeddings = e.data[i].embedding
+                i += 1
+            self.__messagestore.update_messages(list(email_batch))
+            result = result + list(email_batch)
 
         return result
 
