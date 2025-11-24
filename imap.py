@@ -5,7 +5,24 @@ import string
 import time
 from email.header import decode_header
 from imaplib import IMAP4
-from itertools import batched
+
+# Import batched from itertools if available (Python 3.12+), else define a fallback
+try:
+    from itertools import batched  # Python 3.12+
+except ImportError:
+    # simple fallback for older Pythons
+    def batched(iterable, n):
+        it = iter(iterable)
+        while True:
+            batch = []
+            for _ in range(n):
+                try:
+                    batch.append(next(it))
+                except StopIteration:
+                    break
+            if not batch:
+                break
+            yield batch
 
 import backoff
 import bs4
@@ -275,8 +292,7 @@ class ImapHandler:
         from collections.abc import Iterable
         if isinstance(uids, (str, bytes)) or not isinstance(uids, Iterable):
             self.logger.error(
-                "Expected the uids to be a non-string iterable \
-                              moving from folder %s to folder %s",
+                "Expected the uids to be a non-string iterable moving from folder %s to folder %s",
                 folder,
                 dest_folder,
             )
@@ -318,15 +334,9 @@ class ImapHandler:
 
         raw_header = mesg.get(HEADER_KEY)
         raw_body = mesg.get(BODY_KEY)
-        if raw_body is None:
-            # no body available; return minimal info if header present
-            if raw_header is None:
-                return {"from": "", "tocc": "", "body": ""}
-            payload = email.message_from_bytes(b"")
-            body_text = ""
-        else:
-            payload = email.message_from_bytes(raw_body)
-            body_text = mesg_to_text(payload)
+
+        payload = email.message_from_bytes(raw_body or b"")
+        body_text = mesg_to_text(payload) if raw_body is not None else ""
 
         to_addr = get_header(raw_header, "TO") if raw_header is not None else ""
         to_addr += get_header(raw_header, "CC") if raw_header is not None else ""

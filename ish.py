@@ -178,14 +178,13 @@ class ISH:
         ),
     )
     def __get_embeddings(self, texts: list[str]) -> list:
-        """Get the embedding from OpenAI
-
+        """Get embeddings from OpenAI API for a list of texts
         Args:
-            text (str): the message text
-
+            texts (list[str]): list of texts to get embeddings for
         Returns:
-            CreateEmbeddingResponse: the embeddings
+            list: list of embeddings
         """
+
         result = []
         batched_list = list(batched(texts, 20))
         index = 0
@@ -193,16 +192,12 @@ class ISH:
             index += 1
             self.logger.debug("\tBatch %i/%i", index, len(batched_list))
             try:
-                e: CreateEmbeddingResponse = self.__client.embeddings.create(
-                    input=batch, model=self.__settings.openai_model
-                )
+                e = self.__client.embeddings.create(input=batch, model=self.__settings.openai_model)
             except BadRequestError as bre:
                 self.logger.error("Can't send request to openai %s", bre)
-                raise
-
+                raise bre
             embeddings = [emb_obj.embedding for emb_obj in e.data]
-            result = result + embeddings
-
+            result.extend(embeddings)
         return result
 
     def get_msgs(self, folder: str, uids: List[int]) -> Dict[int, str]:
@@ -424,8 +419,8 @@ class ISH:
                 mess_to_move = {
                     "uid": uid,
                     "probability": top_probability,
-                    "from": mesgs[uid]["from"][0],
-                    "body": mesgs[uid]["body"][0:100],
+                    "from": mesgs[uid]["from"],        # -> use full string, not [0]
+                    "body": mesgs[uid]["body"][0:100], # keep slice for preview
                 }
                 if top_probability > 0.25:
                     self._log_move(uid, "Going to move", ranks, mess_to_move)
@@ -521,9 +516,9 @@ class ISH:
         return moved
 
     def run(self) -> int:
-
         settings = self.__settings
-        next_training = time()
+        # initialize next_training so training doesn't always run immediately unless intended
+        next_training = time() + timedelta(hours=24).total_seconds()
 
         for f in settings.source_folders:
             self.logger.debug("Source folder: %s", f)
@@ -535,7 +530,7 @@ class ISH:
             return 1
 
         if not os.path.isfile(self.model_file):
-            self.logger.info("No classifier at %s. Going to learning folders.")
+            self.logger.info("No classifier at %s. Going to learning folders.", self.model_file)
             self._train = True
 
         while not self._exit_event.is_set():
@@ -551,12 +546,19 @@ class ISH:
         return 0
 
     def close(self):
-        if self.__imap_conn is None:
-            self.__imap_conn.close()
+        # Fix inverted checks: only close if objects exist
+        if self.__imap_conn is not None:
+            try:
+                self.__imap_conn.close()
+            except Exception:
+                pass
             self.__imap_conn = None
 
-        if self.__client is None:
-            self.__client.close()
+        if self.__client is not None:
+            try:
+                self.__client.close()
+            except Exception:
+                pass
             self.__client = None
 
     def __del__(self):

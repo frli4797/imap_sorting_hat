@@ -13,14 +13,12 @@ class Settings(dict):
 
     @staticmethod
     def get_user_directory() -> str:
-        directory: str
-        if os.name == "nt":
-            directory = os.path.expandvars("%USERPROFILE%")
-        elif os.name == "posix":
-            directory = os.path.expandvars("$HOME")
-        elif os.name == "mac":
-            directory = os.path.expandvars("$HOME")
-        return directory
+        # Prefer expanduser which works across platforms
+        try:
+            return os.path.expanduser("~")
+        except Exception:
+            # Fallback to environment vars
+            return os.environ.get("HOME") or os.environ.get("USERPROFILE") or "/"
 
     @property
     def settings_file(self):
@@ -118,3 +116,25 @@ class Settings(dict):
             self.__read()
         self.__set_directories()
         self.logger.debug("Settings\n%s", self)
+
+    # New helper methods referenced by ish.py (no-op / sane defaults)
+    def update_data_settings(self):
+        """Ensure data directory exists and defaults are set."""
+        self.__set_directories()
+
+    def update_login_settings(self):
+        """Placeholder; keep for backwards compatibility with ish.configure_and_connect."""
+        # No-op here; interactive tools can implement a prompt elsewhere.
+
+    def update_openai_settings(self):
+        """Placeholder; keep for backwards compatibility with ish.configure_and_connect."""
+        # No-op here.
+
+    def update_folder_settings(self, available_folders: list):
+        """Ensure folder-related settings are lists and exist."""
+        if "source_folders" not in self:
+            self["source_folders"] = []
+        if "destination_folders" not in self:
+            self["destination_folders"] = []
+        if "ignore_folders" not in self:
+            self["ignore_folders"] = []
