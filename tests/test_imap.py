@@ -4,8 +4,8 @@ from unittest import mock
 import pytest
 from email.message import EmailMessage
 
-import imap as imap_mod
-from imap import (
+from imap_sorting_hat import imap as imap_mod
+from imap_sorting_hat.imap import (
     html2text,
     get_header,
     mesg_to_text,

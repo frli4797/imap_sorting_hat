@@ -31,8 +31,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -U pip
-          pip install -r requirements.txt
-          # or: pip install .[dev]
+          pip install -r requirements.txt || true
+          pip install -e .
       
       - name: Run tests
         run: pytest tests

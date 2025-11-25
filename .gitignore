@@ -1,6 +1,86 @@
 /.venv
-/test.py
-scrap.py
-/__*
 .ish/*
-tests/__pycache__/*
+
+# -------------------------
+# Python
+# -------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Pip installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Pytest cache
+.pytest_cache/
+.cache/
+
+# Coverage reports
+.coverage
+coverage.xml
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# -------------------------
+# Project structure specific
+# -------------------------
+# Ignore package build copies or local run artifacts
+src/imap_sorting_hat/__pycache__/
+tests/__pycache__/
+
+# -------------------------
+# Editors / IDEs
+# -------------------------
+
+# VS Code
+# .vscode/*
+# !.vscode/settings.json
+# !.vscode/tasks.json
+# !.vscode/launch.json
+# !.vscode/extensions.json
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+
+# -------------------------
+# OS files
+# -------------------------
+.DS_Store
+Thumbs.db
+
+# -------------------------
+# Docker
+# -------------------------
+# Docker build cache
+**/.dockerignore
+docker-compose.override.yml
+docker-compose.local.yml
+
+# -------------------------
+# Logs
+# -------------------------
+*.log
+
+# -------------------------
+# Environment files (optional)
+# -------------------------
+.env
+.env.*
+
+

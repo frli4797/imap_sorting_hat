@@ -1,7 +1,6 @@
 import os
 
-from settings import Settings
-
+from imap_sorting_hat.settings import Settings
 
 def test_update_folder_settings_adds_missing_keys(tmp_path, monkeypatch):
     s = Settings(debug=True)
