@@ -1,7 +1,4 @@
 import os
-from unittest import mock
-
-import pytest
 
 from settings import Settings
 

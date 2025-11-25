@@ -1,4 +1,3 @@
-import io
 import string
 from unittest import mock
 

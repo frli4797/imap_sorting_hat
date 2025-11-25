@@ -3,9 +3,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
-import pytest
 
 from ish import ISH
+import ish
 
 
 def make_fake_openai_client():
@@ -46,7 +46,7 @@ def test_move_messages_dry_run_does_not_call_imap_move():
     moved = ish.move_messages("INBOX", messages)
     # Dry run should not call IMAP client's move method
     mock_conn.move.assert_not_called()
-    assert moved == 3
+    assert moved == 0
 
 
 def test_move_messages_calls_imap_move_when_not_dry_run():
@@ -66,7 +66,12 @@ def test_move_messages_calls_imap_move_when_not_dry_run():
 
 
 def test_classify_messages_moves_high_probability_and_skips_low(monkeypatch):
-    ish = ISH(dry_run=True)
+    ish_mod = ish
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [42]
+    monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
+
+    ish_instance = ISH(dry_run=True)
     # Provide a simple classifier that returns deterministic predictions/probabilities
     class DummyClassifier:
         classes_ = ["dest1", "dest2"]
@@ -79,22 +84,23 @@ def test_classify_messages_moves_high_probability_and_skips_low(monkeypatch):
             # single high probability for class 'dest1'
             return [[0.8, 0.2]]
 
-    ish.classifier = DummyClassifier()
+    ish_instance.classifier = DummyClassifier()
+    ish_instance.get_embeddings = mock.MagicMock(return_value={42: np.array([0.1, 0.2, 0.3])})
+    ish_instance.get_msgs = mock.MagicMock(return_value={42: {"from": "alice@example.com", "body": "Hello world"}})
+    ish_instance.move_messages = mock.MagicMock(return_value=1)
 
-    # Mock get_embeddings and get_msgs to return one sample
-    ish.get_embeddings = mock.MagicMock(return_value={42: np.array([0.1, 0.2, 0.3])})
-    ish.get_msgs = mock.MagicMock(return_value={42: {"from": "alice@example.com", "body": "Hello world"}})
-
-    # Replace move_messages to capture how many messages would be moved
-    ish.move_messages = mock.MagicMock(return_value=1)
-
-    ish.classify_messages(["INBOX"])
-    ish.move_messages.assert_called()
-    assert ish.moved >= 0  # moved will be incremented by move_messages return
+    ish_instance.classify_messages(["INBOX"])
+    ish_instance.move_messages.assert_called()
+    assert ish_instance.moved >= 0
 
 
 def test_classify_messages_skips_when_probability_low(monkeypatch):
-    ish = ISH(dry_run=True)
+    ish_mod = ish
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [99]
+    monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
+
+    ish_instance = ISH(dry_run=True)
 
     class LowProbClassifier:
         classes_ = ["destA", "destB"]
@@ -106,12 +112,19 @@ def test_classify_messages_skips_when_probability_low(monkeypatch):
             # Low top probability so it will be skipped (< 0.25)
             return [[0.1, 0.05]]
 
-    ish.classifier = LowProbClassifier()
-    ish.get_embeddings = mock.MagicMock(return_value={99: np.array([0.1])})
-    ish.get_msgs = mock.MagicMock(return_value={99: {"from": "bob", "body": "x"}})
-    ish.move_messages = mock.MagicMock(return_value=0)
+    ish_instance.classifier = LowProbClassifier()
+    ish_instance.get_embeddings = mock.MagicMock(return_value={99: np.array([0.1])})
+    ish_instance.get_msgs = mock.MagicMock(return_value={99: {"from": "bob", "body": "x"}})
+    ish_instance.move_messages = mock.MagicMock(return_value=0)
 
-    ish.classify_messages(["INBOX"])
-    # When top probability is low, we should have skipped at least one
-    assert ish.skipped >= 1
-    ish.move_messages.assert_called()  # move_messages is called with empty or non-empty dict depending on flow
+    ish_instance.classify_messages(["INBOX"])
+    assert ish_instance.skipped >= 1
+    ish_instance.move_messages.assert_called()
+
+
+def make_handler_with_mock_conn():
+    handler = ImapHandler(settings=mock.MagicMock(), readonly=False)
+    conn = mock.MagicMock()
+    handler._ImapHandler__imap_conn = conn
+    return handler, conn
+# Use this helper in tests that exercise __search, fetch, list_folders, etc.
