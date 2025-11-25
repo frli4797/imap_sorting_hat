@@ -21,7 +21,6 @@ import sys
 from datetime import datetime, timedelta
 from enum import Enum
 from hashlib import sha256
-from itertools import batched
 from os.path import join
 from threading import Event
 from time import perf_counter, time
@@ -38,6 +37,24 @@ from sklearn.model_selection import train_test_split
 
 from imap import ImapHandler
 from settings import Settings
+
+# Import batched from itertools if available (Python 3.12+), else define a fallback
+try:
+    from itertools import batched  # Python 3.12+
+except ImportError:
+    # simple fallback for older Pythons
+    def batched(iterable, n):
+        it = iter(iterable)
+        while True:
+            batch = []
+            for _ in range(n):
+                try:
+                    batch.append(next(it))
+                except StopIteration:
+                    break
+            if not batch:
+                break
+            yield batch
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(module)s %(message)s"
