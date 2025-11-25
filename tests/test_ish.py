@@ -4,8 +4,8 @@ from unittest import mock
 
 import numpy as np
 
-import imap_sorting_hat.ish as ish_mod
-from imap_sorting_hat.ish import ISH
+import ish.app as ish_mod
+from ish.app import ISH
 
 
 def make_fake_openai_client():
