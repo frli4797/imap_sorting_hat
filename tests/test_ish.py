@@ -123,7 +123,7 @@ def test_classify_messages_skips_when_probability_low(monkeypatch):
 
 
 def make_handler_with_mock_conn():
-    handler = ImapHandler(settings=mock.MagicMock(), readonly=False)
+    handler = ImapHandler(settings=mock.MagicMock(), readonly=False) # pyright: ignore[reportUndefinedVariable]
     conn = mock.MagicMock()
     handler._ImapHandler__imap_conn = conn
     return handler, conn
