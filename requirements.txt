@@ -6,3 +6,5 @@ IMAPClient
 beautifulsoup4
 requests
 backoff
+pytest
+

@@ -3,3 +3,4 @@
 scrap.py
 /__*
 .ish/*
+tests/__pycache__/*
