@@ -1,4 +1,4 @@
-name: ci
+name: edge build
 
 on:
   push:
