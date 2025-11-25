@@ -5,7 +5,24 @@ import string
 import time
 from email.header import decode_header
 from imaplib import IMAP4
-from itertools import batched
+
+# Import batched from itertools if available (Python 3.12+), else define a fallback
+try:
+    from itertools import batched  # Python 3.12+
+except ImportError:
+    # simple fallback for older Pythons
+    def batched(iterable, n):
+        it = iter(iterable)
+        while True:
+            batch = []
+            for _ in range(n):
+                try:
+                    batch.append(next(it))
+                except StopIteration:
+                    break
+            if not batch:
+                break
+            yield batch
 
 import backoff
 import bs4
@@ -47,10 +64,10 @@ def get_header(raw_header, key):
             header_str = f"{header_str} {_header}"
         else:
             try:
-                header_str = f"{header_str} {_header.decode(c_set or "utf-8")}"
+                header_str = f"{header_str} {_header.decode(c_set or 'utf-8')}"
             except LookupError:
                 # Retry with utf-8, if we didn't find the codec.
-                header_str = f"{header_str} {_header.decode("utf-8")}"
+                header_str = f"{header_str} {_header.decode('utf-8')}"
 
     return header_str.strip()
 
@@ -61,11 +78,11 @@ def mesg_to_text(mesg: email.message.Message) -> str:
     for part in mesg.walk():
         charset = part.get_content_charset() or "utf-8"
         if part.get_content_type() == "text/plain":
-            text += part.get_payload(decode=True).decode(charset, errors="ignore")
+            payload_bytes = part.get_payload(decode=True) or b""
+            text += payload_bytes.decode(charset, errors="ignore")
         elif part.get_content_type() == "text/html":
-            text += html2text(
-                part.get_payload(decode=True).decode(charset, errors="ignore")
-            )
+            payload_bytes = part.get_payload(decode=True) or b""
+            text += html2text(payload_bytes.decode(charset, errors="ignore"))
 
     text = _RE_SYMBOL_SEQ.sub("", text)
     text = _RE_WHITESPACE.sub(" ", text)
@@ -204,7 +221,7 @@ class ImapHandler:
         backoff.expo,
         (IOError, IMAP4.error, IMAPClientError),
         max_tries=4,
-        on_backoff=lambda self, details: self.logger.warning(
+        on_backoff=lambda details: base_logger.warning(
             "Backing off %0.1f seconds after %i tries",
             details["wait"],
             details["tries"],
@@ -255,7 +272,7 @@ class ImapHandler:
     def move(
         self,
         folder: str,
-        uids: list,
+        uids,
         dest_folder: str,
         flag_messages=True,
         flag_unseen=True,
@@ -271,14 +288,18 @@ class ImapHandler:
         Returns:
             int: number of messages moved
         """
-        if not isinstance(uids, list):
+        # Accept any iterable of uids except str/bytes; normalize to list
+        from collections.abc import Iterable
+        if isinstance(uids, (str, bytes)) or not isinstance(uids, Iterable):
             self.logger.error(
-                "Expected the uids to be a list \
-                              moving from folder %s to folder %s",
+                "Expected the uids to be a non-string iterable moving from folder %s to folder %s",
                 folder,
                 dest_folder,
             )
-            raise ValueError("Expected uids to be a list")
+            raise ValueError("Expected uids to be a non-string iterable")
+        uids = list(uids)
+        if not uids:
+            return 0
         self.__imap_conn.select_folder(folder, self.__readonly)
         if flag_messages:
             self.__imap_conn.add_flags(uids, [imapclient.FLAGGED])
@@ -311,15 +332,16 @@ class ImapHandler:
         # Let's strip the quotes
         mesg = {k.replace(b'"', b""): v for k, v in p_mesg.items()}
 
-        raw_header = mesg[HEADER_KEY]
-        raw_body = mesg[BODY_KEY]
-        payload = email.message_from_bytes(raw_body)
-        body_text = mesg_to_text(payload)
+        raw_header = mesg.get(HEADER_KEY)
+        raw_body = mesg.get(BODY_KEY)
 
-        to_addr = get_header(raw_header, "TO")
-        to_addr += get_header(raw_header, "CC")
-        from_addr = get_header(raw_header, "FROM")
-        subject = get_header(raw_header, "SUBJECT").removeprefix("**SPAM**").strip()
+        payload = email.message_from_bytes(raw_body or b"")
+        body_text = mesg_to_text(payload) if raw_body is not None else ""
+
+        to_addr = get_header(raw_header, "TO") if raw_header is not None else ""
+        to_addr += get_header(raw_header, "CC") if raw_header is not None else ""
+        from_addr = get_header(raw_header, "FROM") if raw_header is not None else ""
+        subject = get_header(raw_header, "SUBJECT").removeprefix("**SPAM**").strip() if raw_header is not None else ""
 
         mesg_dict = {
             "from": from_addr,
