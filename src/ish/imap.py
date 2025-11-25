@@ -29,7 +29,7 @@ import bs4
 import imapclient
 from imapclient.exceptions import IMAPClientError, LoginError
 
-from settings import Settings
+from .settings import Settings
 
 _RE_SYMBOL_SEQ = re.compile(r"(?<=\s)\W+(?=\s)")
 _RE_WHITESPACE = re.compile(r"\s+")

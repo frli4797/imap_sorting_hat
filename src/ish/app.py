@@ -24,19 +24,19 @@ from hashlib import sha256
 from os.path import join
 from threading import Event
 from time import perf_counter, time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import backoff
 import joblib
 import numpy as np
 from openai import APIError, BadRequestError, OpenAI, RateLimitError
-from openai.types import CreateEmbeddingResponse
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 
-from imap import ImapHandler
-from settings import Settings
+
+from .imap import ImapHandler
+from .settings import Settings
 
 # Import batched from itertools if available (Python 3.12+), else define a fallback
 try:
@@ -95,7 +95,7 @@ class ISH:
         if ISH.debug:
             self.logger.setLevel(logging.DEBUG)
         self.__settings = Settings(ISH.debug)
-        self.__client: OpenAI = None
+        self.__client: Optional[OpenAI] = None
         self.__imap_conn: ImapHandler = ImapHandler(self.__settings)
 
         self._interactive = interactive
@@ -103,7 +103,7 @@ class ISH:
         self._daemon = daemon
         self._dry_run = dry_run
 
-        self.classifier: RandomForestClassifier = None
+        self.classifier: Optional[RandomForestClassifier] = None
         self.moved = 0
         self.skipped = 0
 
@@ -342,7 +342,7 @@ class ISH:
         self.logger.debug("Total embeddings found/added %i in %s.", len(dembd), folder)
         return dembd
 
-    def learn_folders(self, folders: List[str]) -> RandomForestClassifier:
+    def learn_folders(self, folders: List[str]) -> Optional[RandomForestClassifier]:
         """Learn the (target) folders using cached and fetched embeddings
             Also always saves the model pickle to disk
 

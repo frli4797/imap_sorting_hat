@@ -4,8 +4,8 @@ from unittest import mock
 
 import numpy as np
 
-from ish import ISH
-import ish
+import ish.app as ish_mod
+from ish.app import ISH
 
 
 def make_fake_openai_client():
@@ -66,7 +66,6 @@ def test_move_messages_calls_imap_move_when_not_dry_run():
 
 
 def test_classify_messages_moves_high_probability_and_skips_low(monkeypatch):
-    ish_mod = ish
     fake_imap = mock.MagicMock()
     fake_imap.search.return_value = [42]
     monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
@@ -95,7 +94,6 @@ def test_classify_messages_moves_high_probability_and_skips_low(monkeypatch):
 
 
 def test_classify_messages_skips_when_probability_low(monkeypatch):
-    ish_mod = ish
     fake_imap = mock.MagicMock()
     fake_imap.search.return_value = [99]
     monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
