@@ -1,15 +1,40 @@
-FROM python:3
-ENV ish_path /opt/ish
-ENV ISH_CONFIG_PATH /opt/ish/config
+# ============================
+# 1. Base builder image
+# ============================
+FROM python:3.13-slim AS builder
 
-RUN apt-get update && apt-get install build-essential
+WORKDIR /app
 
-ENV VIRTUAL_ENV=/opt/venv
-RUN python3 -m venv $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-COPY requirements.txt ./
-RUN pip3 install --upgrade pip && pip install --no-cache-dir -r requirements.txt
-COPY *.py ${ish_path}/ 
-WORKDIR ${ish_path}
-RUN ["mkdir", "-p", "${ISH_CONFIG_PATH}"]
-CMD [ "python3", "ish.py" ]
+# Install build dependencies if needed by your deps (optional)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project metadata first for better caching
+COPY pyproject.toml ./
+COPY README.md .
+COPY LICENSE .
+
+# Copy application code
+COPY src/ src/
+
+# Cipy requirements file
+COPY requirements.txt .
+
+# Install the package (no dev deps)
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt && \
+    pip install .
+
+# ============================
+# 2. Runtime image
+# ============================
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Copy installed site-packages from builder
+COPY --from=builder /usr/local /usr/local
+
+# Default command — adjust to your app’s entrypoint
+CMD ["python", "-m", "ish.app"]

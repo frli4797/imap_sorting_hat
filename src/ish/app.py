@@ -272,6 +272,12 @@ class ISH:
         if len(uids) > 0:
             self.logger.info("Getting %i embeddings from %s", len(uids), folder)
 
+        self.logger.debug("Opening message cache '%s'", self.msgs_file)
+
+        # Output the contents of self.__settings.data_directory to the log for debugging
+        self.logger.debug("Data directory contents: %s", os.listdir(self.__settings.data_directory))
+
+    
         with shelve.open(self.msgs_file, writeback=False) as fm:
             new_uids = []  # uids that need a new hash
             # Check which folder/messages that are not in the cache.
