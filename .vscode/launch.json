@@ -11,15 +11,16 @@
       "program": "${file}",
       "console": "integratedTerminal"
     },
-
     {
       "name": "ISH learn",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/ish.py",
+      "program": "${workspaceFolder}/src/ish.app.py",
       "console": "integratedTerminal",
       "justMyCode": false,
-      "args": ["-l"],
+      "args": [
+        "-l"
+      ],
       "env": {
         "ISH_CONFIG_PATH": "${workspaceFolder}/.ish",
         "ISH_DEBUG": "True",
@@ -30,11 +31,27 @@
       "name": "ISH",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/ish.py",
+      "program": "${workspaceFolder}/src/ish/app.py",
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "justMyCode": false,
-      "args": ["-v"]
-      //"env":{"ISH_CONFIG_PATH": "dummy"}
+      "justMyCode": true,
+      "args": [
+        "-v"
+      ],
+      "env": {
+        "ISH_CONFIG_PATH": "dummy"
+      }
+    },
+    {
+      "name": "Run ish (module)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ish.app",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true,
+      "args": [
+        "-v"
+      ]
     },
     {
       "name": "MIgrator",
