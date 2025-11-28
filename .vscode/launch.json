@@ -50,7 +50,9 @@
       "cwd": "${workspaceFolder}",
       "justMyCode": true,
       "args": [
-        "-v"
+        "-v",
+        "-D",
+        "-l"
       ]
     },
     {
