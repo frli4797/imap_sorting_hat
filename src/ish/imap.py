@@ -30,6 +30,7 @@ import imapclient
 from imapclient.exceptions import IMAPClientError, LoginError
 
 from .settings import Settings
+from .message import Message  # added
 
 _RE_SYMBOL_SEQ = re.compile(r"(?<=\s)\W+(?=\s)")
 _RE_WHITESPACE = re.compile(r"\s+")
@@ -319,7 +320,7 @@ class ImapHandler:
         self.logger.info("Moved from %s to %s: %i", folder, dest_folder, len(uids))
         return len(uids)
 
-    def parse_mesg(self, p_mesg: dict) -> dict:
+    def parse_mesg(self, p_mesg: dict) -> Message:
         """Parse a raw message into a string
 
         Args:
@@ -343,10 +344,12 @@ class ImapHandler:
         from_addr = get_header(raw_header, "FROM") if raw_header is not None else ""
         subject = get_header(raw_header, "SUBJECT").removeprefix("**SPAM**").strip() if raw_header is not None else ""
 
-        mesg_dict = {
-            "from": from_addr,
-            "tocc": to_addr,
-            "body": f"Subject: {subject}. {body_text}",
-        }
+        mesg_dict = Message(
+            uid=None,
+            from_addr=from_addr,
+            to_addr=to_addr,
+            subject=subject,
+            body=f"Subject: {subject}. {body_text}",
+        )
 
         return mesg_dict

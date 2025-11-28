@@ -36,6 +36,7 @@ from sklearn.model_selection import train_test_split
 
 
 from .imap import ImapHandler
+from .message import Message  # added
 from .settings import Settings
 
 # Import batched from itertools if available (Python 3.12+), else define a fallback
@@ -65,7 +66,7 @@ base_logger = logging.getLogger("ish")
 embed_max_chars = 8192
 max_source_messages = 160
 max_learn_messages = 1600
-POLL_TIME_SEC = 120
+POLL_TIME_SEC = 30
 
 
 def env_to_bool(key: str):
@@ -130,13 +131,14 @@ class ISH:
     @property
     def daemon(self) -> bool:
         return self._daemon
+    
+    @property
+    def dry_run(self) -> bool:
+        return self._dry_run
 
     @property
     def interactive(self) -> bool:
         return self._interactive
-
-    def __mesg_hash(self, mesg: str) -> str:
-        return sha256(mesg["body"].encode("utf-8")).hexdigest()[:12]
 
     def __connect_openai(self) -> bool:
         if not self.__settings.openai_api_key:
@@ -217,7 +219,7 @@ class ISH:
             result.extend(embeddings)
         return result
 
-    def get_msgs(self, folder: str, uids: List[int]) -> Dict[int, str]:
+    def get_msgs(self, folder: str, uids: List[int]) -> Dict[int, Message]:
         """Fetch new messages through cache {uid: 'msg'}
 
         Args:
@@ -248,8 +250,8 @@ class ISH:
                 self.logger.debug("Found %s messages not in cache", len(new_uids))
                 msgs = imap_conn.fetch(new_uids)
                 for uid in new_uids:
-                    mesg = imap_conn.parse_mesg(msgs[uid])
-                    msg_hash = self.__mesg_hash(mesg)
+                    mesg = imap_conn.parse_mesg(msgs[uid])  # now returns Message
+                    msg_hash = mesg.hash()
                     fm[f"{folder}:{uid}"] = msg_hash
                     fm[f"{msg_hash}.mesg"] = mesg
                     d[uid] = mesg
@@ -296,7 +298,7 @@ class ISH:
             self.logger.debug("Adding hashes for %i messages", len(dmesg))
             # Saving hashes for unseen messages.
             for uid, mesg in dmesg.items():
-                msg_hash = self.__mesg_hash(mesg)
+                msg_hash = mesg.hash()
                 dhash[uid] = msg_hash
                 fm[f"{folder}:{uid}"] = msg_hash
             self.logger.debug("Added hashes for messages.")
@@ -318,8 +320,9 @@ class ISH:
                 msgs = self.get_msgs(folder, new_uids)
 
                 t_batch_0 = perf_counter()
+                # change to use msg.body
                 embeddings = self.__get_embeddings(
-                    list(msg["body"][:embed_max_chars] for msg in msgs.values())
+                    list(msg.body[:embed_max_chars] for msg in msgs.values())
                 )
                 t_batch_1 = perf_counter()
                 if len(embeddings) == len(msgs.keys()):
@@ -417,7 +420,7 @@ class ISH:
         imap_conn: ImapHandler = self.__imap_conn
         self.skipped = 0
         self.moved = 0
-        classifier = self.classifier
+        classifier: RandomForestClassifier = self.classifier
         if self.classifier is None:
             classifier = joblib.load(self.model_file)
 
@@ -442,8 +445,8 @@ class ISH:
                 mess_to_move = {
                     "uid": uid,
                     "probability": top_probability,
-                    "from": mesgs[uid]["from"],        # -> use full string, not [0]
-                    "body": mesgs[uid]["body"][0:100], # keep slice for preview
+                    "from": mesgs[uid].from_addr,
+                    "body": mesgs[uid].preview(100),
                 }
                 if top_probability > 0.25:
                     self._log_move(uid, "Going to move", ranks, mess_to_move)
@@ -541,7 +544,7 @@ class ISH:
     def run(self) -> int:
         settings = self.__settings
         # initialize next_training so training doesn't always run immediately unless intended
-        next_training = time() + timedelta(hours=24).total_seconds()
+        next_training = time() + timedelta(minutes=1).total_seconds()
 
         for f in settings.source_folders:
             self.logger.debug("Source folder: %s", f)
@@ -551,14 +554,14 @@ class ISH:
 
         if not self.connect():
             return 1
-
+        
         if not os.path.isfile(self.model_file):
             self.logger.info("No classifier at %s. Going to learning folders.", self.model_file)
-            self._train = True
+            self.learn_folders(settings.destination_folders)
 
         while not self._exit_event.is_set():
             if self.train and time() >= next_training:
-                next_training: datetime = time() + timedelta(hours=24).total_seconds()
+                next_training = time() + timedelta(minutes=1).total_seconds()
                 self.learn_folders(settings.destination_folders)
 
             self.classify_messages(settings.source_folders)
@@ -575,14 +578,12 @@ class ISH:
                 self.__imap_conn.close()
             except Exception:
                 pass
-            self.__imap_conn = None
 
         if self.__client is not None:
             try:
                 self.__client.close()
             except Exception:
                 pass
-            self.__client = None
 
     def __del__(self):
         self.close()
