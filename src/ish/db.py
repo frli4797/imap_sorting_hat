@@ -101,11 +101,6 @@ class SQLiteCache:
             "INSERT OR IGNORE INTO messages_content (msg_hash, from_addr, to_addr, subject, body) VALUES (?, ?, ?, ?, ?)",
             (msg_hash, msg.from_addr, msg.to_addr, msg.subject, msg.body),
         )
-        # Ensure a hash only maps to one folder by clearing previous associations
-        cur.execute(
-            "DELETE FROM folder_messages WHERE msg_hash = ?",
-            (msg_hash,),
-        )
         cur.execute(
             "INSERT OR REPLACE INTO folder_messages (folder, uid, msg_hash) VALUES (?, ?, ?)",
             (folder, int(uid), msg_hash),

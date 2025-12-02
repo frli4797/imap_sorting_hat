@@ -57,8 +57,6 @@ def _insert_message_preserve_hash(conn: sqlite3.Connection, folder: str, uid: in
         "INSERT OR IGNORE INTO messages_content (msg_hash, from_addr, to_addr, subject, body) VALUES (?, ?, ?, ?, ?)",
         (msg_hash, mesg.from_addr, mesg.to_addr, mesg.subject, mesg.body),
     )
-    # ensure latest folder assignment wins for this hash
-    cur.execute("DELETE FROM folder_messages WHERE msg_hash = ?", (msg_hash,))
     # insert mapping (folder, uid) -> msg_hash
     cur.execute(
         "INSERT OR REPLACE INTO folder_messages (folder, uid, msg_hash) VALUES (?, ?, ?)",
