@@ -4,11 +4,12 @@ import re
 import string
 import time
 from email.header import decode_header
+from email.message import Message as EmailMessage
 from imaplib import IMAP4
 
 # Import batched from itertools if available (Python 3.12+), else define a fallback
 try:
-    from itertools import batched  # Python 3.12+
+    from itertools import batched  # pyright: ignore[reportAssignmentType] # Python 3.12+
 except ImportError:
     # simple fallback for older Pythons
     def batched(iterable, n):
@@ -73,17 +74,17 @@ def get_header(raw_header, key):
     return header_str.strip()
 
 
-def mesg_to_text(mesg: email.message.Message) -> str:
+def mesg_to_text(mesg: EmailMessage) -> str:
     """Convert an email message to plain-text"""
     text = ""
     for part in mesg.walk():
         charset = part.get_content_charset() or "utf-8"
         if part.get_content_type() == "text/plain":
             payload_bytes = part.get_payload(decode=True) or b""
-            text += payload_bytes.decode(charset, errors="ignore")
+            text += payload_bytes.decode(charset, errors="ignore") # pyright: ignore[reportAttributeAccessIssue]
         elif part.get_content_type() == "text/html":
             payload_bytes = part.get_payload(decode=True) or b""
-            text += html2text(payload_bytes.decode(charset, errors="ignore"))
+            text += html2text(payload_bytes.decode(charset, errors="ignore")) # pyright: ignore[reportAttributeAccessIssue]
 
     text = _RE_SYMBOL_SEQ.sub("", text)
     text = _RE_WHITESPACE.sub(" ", text)
@@ -98,7 +99,7 @@ class ImapHandler:
         self.__imap_conn = None
         self.logger = logging.getLogger(self.__class__.__name__)
         self.__readonly = readonly
-        self.__capabilities = None
+        self.__capabilities = [""]
 
     @property
     def capabilities(self) -> list:
@@ -119,7 +120,7 @@ class ImapHandler:
         max_tries=5,
         on_backoff=lambda details: base_logger.warning(
             "Backing off %0.1f seconds on %i logging in to IMAP",
-            details["wait"],
+            details.get("wait"),
             details["tries"],
         ),
     )
@@ -172,8 +173,8 @@ class ImapHandler:
         max_tries=5,
         on_backoff=lambda details: base_logger.warning(
             "Backing off %0.1f seconds on %i listing folders with IMAP",
-            details["wait"],
-            details["tries"],
+            details.get("wait"),
+            details.get("tries"),
         ),
     )
     def list_folders(self) -> list[str]:
@@ -187,6 +188,9 @@ class ImapHandler:
             return self.__list_folders()
 
     def __list_folders(self) -> list[str]:
+        if self.__imap_conn is None:
+            self.logger.error("Not connected to IMAP server")
+            raise ConnectionError("Not connected to IMAP server")   
         return [t[2] for t in self.__imap_conn.list_folders()]
 
     def fetch(self, uids: list) -> dict:
@@ -224,11 +228,14 @@ class ImapHandler:
         max_tries=4,
         on_backoff=lambda details: base_logger.warning(
             "Backing off %0.1f seconds after %i tries",
-            details["wait"],
-            details["tries"],
+            details.get("wait"),
+            details.get("tries"),
         ),
     )
     def __fetch_batch(self, uid_batch: list):
+        if self.__imap_conn is None:
+            self.logger.error("Not connected to IMAP server")
+            raise ConnectionError("Not connected to IMAP server")   
         return self.__imap_conn.fetch(uid_batch, [HEADER_KEY, BODY_KEY])
 
     @backoff.on_exception(
@@ -237,8 +244,8 @@ class ImapHandler:
         max_tries=5,
         on_backoff=lambda details: base_logger.warning(
             "Backing off %0.1f seconds on %i searching IMAP",
-            details["wait"],
-            details["tries"],
+            details.get("wait"),
+            details.get("tries"),
         ),
     )
     def search(self, folder: str, search_args=None) -> list[int]:
@@ -258,16 +265,20 @@ class ImapHandler:
             self.__reconnect()
             return self.__search(folder, search_args)
 
-    def __search(self, folder: str, search_args=None) -> list[int]:
+    def __search(self, folder: str, search_args=["ALL"]) -> list[int]:
+        if self.__imap_conn is None:
+            self.logger.error("Not connected to IMAP server")
+            raise ConnectionError("Not connected to IMAP server")   
+        
         if search_args is None:
             search_args = ["ALL"]
         self.__imap_conn.select_folder(folder, self.__readonly)
-        results = self.__imap_conn.search(search_args)
+        results = self.__imap_conn.search(search_args) # pyright: ignore[reportArgumentType]
         return results
 
     @backoff.on_exception(
         backoff.expo,
-        (IOError, IMAP4.error, IMAPClientError),
+        (IOError, IMAP4.error, IMAPClientError, ConnectionError),
         max_tries=2,
     )
     def move(
@@ -301,6 +312,10 @@ class ImapHandler:
         uids = list(uids)
         if not uids:
             return 0
+        if self.__imap_conn is None:
+            self.logger.error("Not connected to IMAP server")
+            raise ConnectionError("Not connected to IMAP server")
+
         self.__imap_conn.select_folder(folder, self.__readonly)
         if flag_messages:
             self.__imap_conn.add_flags(uids, [imapclient.FLAGGED])
