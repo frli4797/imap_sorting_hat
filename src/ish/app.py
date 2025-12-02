@@ -15,12 +15,10 @@ Status: Early development
 
 import logging
 import os
-import shelve
 import signal
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import Enum
-from hashlib import sha256
 from os.path import join
 from threading import Event
 from time import perf_counter, time
@@ -38,6 +36,7 @@ from sklearn.model_selection import train_test_split
 from .imap import ImapHandler
 from .message import Message  # added
 from .settings import Settings
+from .db import SQLiteCache
 
 # Import batched from itertools if available (Python 3.12+), else define a fallback
 try:
@@ -105,6 +104,10 @@ class ISH:
         self._dry_run = dry_run
 
         self.classifier: Optional[RandomForestClassifier] = None
+        # sqlite cache placed in data directory
+        self._db_file = join(self.__settings.data_directory, "cache.sqlite")
+        self._cache = SQLiteCache(self._db_file)
+
         self.moved = 0
         self.skipped = 0
 
@@ -114,11 +117,13 @@ class ISH:
 
     @property
     def msgs_file(self) -> str:
-        return join(self.__settings.data_directory, "msgs")
+        # kept for backward compat with code referencing msgs_file; now points to DB
+        return self._db_file
 
     @property
     def embd_file(self) -> str:
-        return join(self.__settings.data_directory, "embd")
+        # kept for backward compat with code referencing embd_file; now points to DB
+        return self._db_file
 
     @property
     def model_file(self) -> str:
@@ -235,27 +240,30 @@ class ISH:
         if len(uids) > 0:
             self.logger.info("Getting %i messages from %s", len(uids), folder)
 
-        with shelve.open(self.msgs_file, writeback=False) as fm:
-            # Check if the message/folder combination is in the cache.
-            for uid in uids:
-                if f"{folder}:{uid}" not in fm:
-                    new_uids.append(uid)
+        # First try to fetch cached messages using the SQL cache
+        for uid in uids:
+            msg_hash = self._cache.get_hash(folder, uid)
+            if msg_hash is None:
+                new_uids.append(uid)
+            else:
+                mesg = self._cache.get_message_by_hash(msg_hash)
+                if mesg:
+                    # attach uid (cache message content doesn't store uid)
+                    d[uid] = Message(uid=uid, from_addr=mesg.from_addr, to_addr=mesg.to_addr, subject=mesg.subject, body=mesg.body)
                 else:
-                    msg_hash = fm[f"{folder}:{uid}"]
-                    mesg = fm[f"{msg_hash}.mesg"]
-                    d[uid] = mesg
-                    continue
-            # If not in the cache, fetch the message and put in cache.
-            if len(new_uids) > 0:
-                self.logger.debug("Found %s messages not in cache", len(new_uids))
-                msgs = imap_conn.fetch(new_uids)
-                for uid in new_uids:
-                    mesg = imap_conn.parse_mesg(msgs[uid])  # now returns Message
-                    msg_hash = mesg.hash()
-                    fm[f"{folder}:{uid}"] = msg_hash
-                    fm[f"{msg_hash}.mesg"] = mesg
-                    d[uid] = mesg
-                self.logger.debug("Found %i messages to cache", len(new_uids))
+                    # Not found; treat as new
+                    new_uids.append(uid)
+
+        # If not in the cache, fetch the message and put in cache.
+        if len(new_uids) > 0:
+            self.logger.debug("Found %s messages not in cache", len(new_uids))
+            msgs = imap_conn.fetch(new_uids)
+            for uid in new_uids:
+                mesg = imap_conn.parse_mesg(msgs[uid])  # returns Message
+                # store in sqlite cache (message content and folder->uid mapping)
+                self._cache.store_message(folder, uid, mesg)
+                d[uid] = mesg
+            self.logger.debug("Found %i messages to cache", len(new_uids))
         self.logger.debug("Total messages found/added %i in %s.", len(d), folder)
         return d
 
@@ -280,73 +288,71 @@ class ISH:
         self.logger.debug("Data directory contents: %s", os.listdir(self.__settings.data_directory))
 
     
-        with shelve.open(self.msgs_file, writeback=False) as fm:
-            new_uids = []  # uids that need a new hash
-            # Check which folder/messages that are not in the cache.
-            for uid in uids:
-                if f"{folder}:{uid}" in fm:
-                    dhash[uid] = fm[f"{folder}:{uid}"]
-                else:
-                    new_uids.append(uid)
-                    continue
-
-            self.logger.debug(
-                "Found %i out of %i needing hash", len(new_uids), len(uids)
-            )
-            dmesg = self.get_msgs(folder, new_uids)
-
-            self.logger.debug("Adding hashes for %i messages", len(dmesg))
-            # Saving hashes for unseen messages.
-            for uid, mesg in dmesg.items():
-                msg_hash = mesg.hash()
+        # First try to use the SQL cache to get msg hash for each uid
+        new_uids = []
+        for uid in uids:
+            msg_hash = self._cache.get_hash(folder, uid)
+            if msg_hash:
                 dhash[uid] = msg_hash
-                fm[f"{folder}:{uid}"] = msg_hash
-            self.logger.debug("Added hashes for messages.")
-            fm.close()
+            else:
+                new_uids.append(uid)
 
-            new_uids = []  # uids that need a new embedding
-            self.logger.debug("Finding embedding for %s messages", len(uids))
-        with shelve.open(self.embd_file, writeback=False) as fe:
-            for uid, msg_hash in dhash.items():  # dhash is {uid: hash}
-                if f"{msg_hash}.embd" in fe:
-                    embd = fe[f"{msg_hash}.embd"]
-                    dembd[uid] = embd
-                    continue
-                else:
-                    new_uids.append(uid)
+        self.logger.debug(
+            "Found %i out of %i needing hash", len(new_uids), len(uids)
+        )
+        dmesg = self.get_msgs(folder, new_uids)
 
-            if len(new_uids) > 0:
-                self.logger.debug("Found %i embeddings not in cache", len(new_uids))
-                msgs = self.get_msgs(folder, new_uids)
+        self.logger.debug("Adding hashes for %i messages", len(dmesg))
+        # Saving unseen messages / mappings into sqlite via store_message
+        for uid, mesg in dmesg.items():
+            msg_hash = self._cache.store_message(folder, uid, mesg)
+            dhash[uid] = msg_hash
+        self.logger.debug("Added hashes for messages.")
 
-                t_batch_0 = perf_counter()
-                # change to use msg.body
-                embeddings = self.__get_embeddings(
-                    list(msg.body[:embed_max_chars] for msg in msgs.values())
+        new_uids = []  # uids that need a new embedding
+        self.logger.debug("Finding embedding for %s messages", len(uids))
+        # check existing embeddings in sqlite
+        for uid, msg_hash in dhash.items():  # dhash is {uid: hash}
+            embd = self._cache.get_embedding(msg_hash)
+            if embd is not None:
+                dembd[uid] = embd
+                continue
+            else:
+                new_uids.append(uid)
+
+        if len(new_uids) > 0:
+            self.logger.debug("Found %i embeddings not in cache", len(new_uids))
+            msgs = self.get_msgs(folder, new_uids)
+
+            t_batch_0 = perf_counter()
+            # change to use msg.body
+            embeddings = self.__get_embeddings(
+                list(msg.body[:embed_max_chars] for msg in msgs.values())
+            )
+            t_batch_1 = perf_counter()
+            if len(embeddings) == len(msgs.keys()):
+                self.logger.debug(
+                    "Took %.2f to BATCH %i embedings.",
+                    t_batch_1 - t_batch_0,
+                    len(embeddings),
                 )
-                t_batch_1 = perf_counter()
-                if len(embeddings) == len(msgs.keys()):
-                    self.logger.debug(
-                        "Took %.2f to BATCH %i embedings.",
-                        t_batch_1 - t_batch_0,
-                        len(embeddings),
-                    )
-                else:
-                    self.logger.error(
-                        "Embeddings list is not same length as messages list"
-                    )
-                    raise IndexError(
-                        "Embeddings list is not same length as messages list"
-                    )
-                self.logger.debug("Storing embeddings for %i messages", len(dmesg))
+            else:
+                self.logger.error(
+                    "Embeddings list is not same length as messages list"
+                )
+                raise IndexError(
+                    "Embeddings list is not same length as messages list"
+                )
+            self.logger.debug("Storing embeddings for %i messages", len(dmesg))
 
-                t_0 = perf_counter()
-                for idx, uid in enumerate(msgs):
-                    # dembd[uid] = self.__get_embedding(msg["body"][:embed_max_chars])
-                    fe[f"{dhash[uid]}.embd"] = embeddings[idx]
-                    dembd[uid] = embeddings[idx]
-                t_1 = perf_counter()
-                self.logger.debug("Took %.2f to download embedings.", t_1 - t_0)
+            t_0 = perf_counter()
+            for idx, uid in enumerate(msgs):
+                emb = embeddings[idx]
+                # store in SQL embeddings table
+                self._cache.store_embedding(dhash[uid], emb)
+                dembd[uid] = emb
+            t_1 = perf_counter()
+            self.logger.debug("Took %.2f to download embedings.", t_1 - t_0)
 
         self.logger.debug("Total embeddings found/added %i in %s.", len(dembd), folder)
         return dembd
@@ -372,10 +378,27 @@ class ISH:
             # Retrieve the UIDs of all messages in the folder
             uids = imap_conn.search(folder, ["ALL"])
             embd = self.get_embeddings(folder, uids[:max_learn_messages])
+            if len(embd) == 0:
+                self.logger.warning("No embeddings available for folder %s; skipping.", folder)
+                continue
             embed_array.extend(embd.values())
             folder_array.extend([folder] * len(embd))
             if self._exit_event.is_set():
                 return None
+
+        if len(embed_array) < 2:
+            self.logger.warning(
+                "Need at least two messages to train; gathered %i. Skipping training.",
+                len(embed_array),
+            )
+            return None
+
+        if len(set(folder_array)) < 2:
+            self.logger.warning(
+                "Need samples from at least two folders to train; gathered folders: %s. Skipping training.",
+                sorted(set(folder_array)),
+            )
+            return None
 
         t1 = perf_counter()
         self.logger.debug(
@@ -422,9 +445,19 @@ class ISH:
         self.moved = 0
         classifier: RandomForestClassifier = self.classifier
         if self.classifier is None:
-            classifier = joblib.load(self.model_file)
+            if not os.path.isfile(self.model_file):
+                self.logger.error("Classifier file %s not found; cannot classify.", self.model_file)
+                return
+            try:
+                classifier = joblib.load(self.model_file)
+            except Exception as exc:
+                self.logger.error("Failed to load classifier from %s: %s", self.model_file, exc)
+                return
 
+        stop_processing = False
         for folder in source_folders:
+            if self._exit_event.is_set():
+                break
             uids = []
             self.logger.info("Classifying messages for folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
@@ -457,6 +490,9 @@ class ISH:
                             self.skipped += 1
                             continue
                         elif answer == Action.QUIT:
+                            self.logger.info("User requested quit; stopping classification.")
+                            self._exit_event.set()
+                            stop_processing = True
                             break
 
                     if dest_folder not in to_move:
@@ -469,6 +505,9 @@ class ISH:
                         uid, "Skipping due to probability", ranks, mess_to_move
                     )
                     self.skipped += 1
+
+            if stop_processing or self._exit_event.is_set():
+                break
 
             self.moved += self.move_messages(folder, to_move)
         if (self.moved + self.skipped) > 0:
@@ -557,12 +596,17 @@ class ISH:
         
         if not os.path.isfile(self.model_file):
             self.logger.info("No classifier at %s. Going to learning folders.", self.model_file)
-            self.learn_folders(settings.destination_folders)
+            clf = self.learn_folders(settings.destination_folders)
+            if clf is None and (self.classifier is None or not os.path.isfile(self.model_file)):
+                self.logger.error("Unable to train classifier; exiting.")
+                return 1
 
         while not self._exit_event.is_set():
             if self.train and time() >= next_training:
                 next_training = time() + timedelta(minutes=1).total_seconds()
-                self.learn_folders(settings.destination_folders)
+                clf = self.learn_folders(settings.destination_folders)
+                if clf is None:
+                    self.logger.warning("Classifier training skipped or failed; keeping previous model.")
 
             self.classify_messages(settings.source_folders)
             if not self.daemon:
@@ -573,6 +617,14 @@ class ISH:
 
     def close(self):
         # Fix inverted checks: only close if objects exist
+        if getattr(self, "_cache", None) is not None:
+            try:
+                self._cache.close()
+            except Exception:
+                pass
+            finally:
+                self._cache = None
+
         if self.__imap_conn is not None:
             try:
                 self.__imap_conn.close()

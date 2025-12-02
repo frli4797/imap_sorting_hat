@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from hashlib import sha256
+import hashlib
 from typing import Optional
 
 
@@ -15,4 +16,6 @@ class Message:
         return self.body[:length]
 
     def hash(self) -> str:
-        return sha256(self.body.encode("utf-8")).hexdigest()[:12]
+        # Generate a short hash based on the message body and all the other fields
+        data = (self.from_addr or "") + (self.to_addr or "") + (self.subject or "") + (self.body or "")
+        return hashlib.blake2b(data.encode("utf-8"), digest_size=8).hexdigest()
