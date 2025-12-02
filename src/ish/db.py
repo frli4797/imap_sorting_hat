@@ -108,6 +108,14 @@ class SQLiteCache:
         self.conn.commit()
         return msg_hash
 
+    def get_folder_uids(self, folder: str) -> List[int]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT uid FROM folder_messages WHERE folder = ?",
+            (folder,),
+        )
+        return [int(row[0]) for row in cur.fetchall()]
+
     # Embeddings
 
     def get_embedding(self, msg_hash: str) -> Optional[np.ndarray]:

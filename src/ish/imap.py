@@ -42,7 +42,7 @@ HEADER_KEY = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
 BODY_KEY = b"BODY[]"
 
 base_logger = logging.getLogger("imap")
-
+logging.getLogger("imapclient.imaplib").setLevel(logging.INFO)
 
 def html2text(html: str) -> str:
     """Convert html to plain-text using beautifulsoup"""

@@ -37,6 +37,7 @@ from .imap import ImapHandler
 from .message import Message  # added
 from .settings import Settings
 from .db import SQLiteCache
+from .migrate_shelve_to_sql import migrate as migrate_legacy_cache
 
 # Import batched from itertools if available (Python 3.12+), else define a fallback
 try:
@@ -60,12 +61,15 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(module)s %(message)s"
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.INFO)
+logging.getLogger("imapclient.imaplib").setLevel(logging.INFO)
 base_logger = logging.getLogger("ish")
 
+
 embed_max_chars = 8192
-max_source_messages = 160
-max_learn_messages = 1600
-POLL_TIME_SEC = 30
+max_source_messages = 320
+max_learn_messages = 3600
+
 
 
 def env_to_bool(key: str):
@@ -82,6 +86,8 @@ class ISH:
     _interactive = False
     _train = False
     _daemon = False
+    _LEARN_INTERVAL_SEC = timedelta(minutes=1).total_seconds()
+    _POLL_TIME_SEC = 30
 
     def __init__(
         self,
@@ -106,6 +112,7 @@ class ISH:
         self.classifier: Optional[RandomForestClassifier] = None
         # sqlite cache placed in data directory
         self._db_file = join(self.__settings.data_directory, "cache.sqlite")
+        self.__maybe_migrate_legacy_cache()
         self._cache = SQLiteCache(self._db_file)
 
         self.moved = 0
@@ -144,6 +151,37 @@ class ISH:
     @property
     def interactive(self) -> bool:
         return self._interactive
+    def __legacy_shelve_candidates(self, base_name: str) -> List[str]:
+        base_path = join(self.__settings.data_directory, base_name)
+        return [
+            base_path,
+            base_path + ".db",
+            base_path + ".dat",
+            base_path + ".dir",
+            base_path + ".bak",
+        ]
+
+    def __legacy_cache_exists(self) -> bool:
+        for base in ("msgs", "embd"):
+            for candidate in self.__legacy_shelve_candidates(base):
+                if os.path.exists(candidate):
+                    return True
+        return False
+
+    def __maybe_migrate_legacy_cache(self) -> None:
+        if os.path.exists(self._db_file):
+            return
+        if not self.__legacy_cache_exists():
+            return
+        self.logger.info(
+            "Detected legacy shelve cache; migrating to SQLite cache at %s",
+            self._db_file,
+        )
+        try:
+            migrate_legacy_cache(sqlite_path=self._db_file)
+        except Exception as exc:
+            self.logger.error("Legacy cache migration failed: %s", exc)
+            raise
 
     def __connect_openai(self) -> bool:
         if not self.__settings.openai_api_key:
@@ -377,7 +415,20 @@ class ISH:
             self.logger.info("Learning folder %s", folder)
             # Retrieve the UIDs of all messages in the folder
             uids = imap_conn.search(folder, ["ALL"])
-            embd = self.get_embeddings(folder, uids[:max_learn_messages])
+            server_uids = uids[:max_learn_messages]
+            cached_uids = self._cache.get_folder_uids(folder)
+            server_uid_set = set(server_uids)
+            cached_only_uids = [
+                uid for uid in cached_uids if uid not in server_uid_set
+            ]
+            if cached_only_uids:
+                self.logger.info(
+                    "Including %i cached-only messages for folder %s",
+                    len(cached_only_uids),
+                    folder,
+                )
+            all_uids = server_uids + cached_only_uids
+            embd = self.get_embeddings(folder, all_uids)
             if len(embd) == 0:
                 self.logger.warning("No embeddings available for folder %s; skipping.", folder)
                 continue
@@ -583,7 +634,7 @@ class ISH:
     def run(self) -> int:
         settings = self.__settings
         # initialize next_training so training doesn't always run immediately unless intended
-        next_training = time() + timedelta(minutes=1).total_seconds()
+        next_training = time() + ISH._LEARN_INTERVAL_SEC
 
         for f in settings.source_folders:
             self.logger.debug("Source folder: %s", f)
@@ -603,7 +654,7 @@ class ISH:
 
         while not self._exit_event.is_set():
             if self.train and time() >= next_training:
-                next_training = time() + timedelta(minutes=1).total_seconds()
+                next_training = time() + ISH._LEARN_INTERVAL_SEC
                 clf = self.learn_folders(settings.destination_folders)
                 if clf is None:
                     self.logger.warning("Classifier training skipped or failed; keeping previous model.")
@@ -611,7 +662,7 @@ class ISH:
             self.classify_messages(settings.source_folders)
             if not self.daemon:
                 break
-            self._exit_event.wait(POLL_TIME_SEC)
+            self._exit_event.wait(ISH._POLL_TIME_SEC)
 
         return 0
 
