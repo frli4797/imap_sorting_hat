@@ -332,7 +332,7 @@ class ISH:
                     )
                 else:
                     self.logger.error(
-                        "Embeddings list is not same length as messages list"
+                        "Embeddings list is not same length as messages list."
                     )
                     raise IndexError(
                         "Embeddings list is not same length as messages list"
