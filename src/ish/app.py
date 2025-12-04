@@ -18,7 +18,7 @@ import os
 import shelve
 import signal
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import Enum
 from hashlib import sha256
 from os.path import join
@@ -29,7 +29,7 @@ from typing import Dict, List, Optional
 import backoff
 import joblib
 import numpy as np
-from openai import APIError, BadRequestError, OpenAI, RateLimitError
+from openai import APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
@@ -66,6 +66,7 @@ embed_max_chars = 8192
 max_source_messages = 160
 max_learn_messages = 1600
 POLL_TIME_SEC = 120
+TRAINING_INTERVAL_SEC = timedelta(hours=24).total_seconds()
 
 
 def env_to_bool(key: str):
@@ -187,7 +188,8 @@ class ISH:
 
     @backoff.on_exception(
         backoff.expo,
-        RateLimitError,
+        (RateLimitError, TimeoutError, APIError, BadRequestError),
+        max_tries=5,
         on_backoff=lambda details: base_logger.warning(
             "Backing off %0.1f seconds after %i tries",
             details["wait"],
@@ -210,7 +212,7 @@ class ISH:
             self.logger.debug("\tBatch %i/%i", index, len(batched_list))
             try:
                 e = self.__client.embeddings.create(input=batch, model=self.__settings.openai_model)
-            except BadRequestError as bre:
+            except (APITimeoutError, BadRequestError) as bre:
                 self.logger.error("Can't send request to openai %s", bre)
                 raise bre
             embeddings = [emb_obj.embedding for emb_obj in e.data]
@@ -408,6 +410,24 @@ class ISH:
         self.logger.debug("Saved classifier.")
         return clf
 
+    def _train_on_destination_folders(self) -> bool:
+        """Ensure we can train on the configured destination folders."""
+        folders = self.__settings.destination_folders
+        if not folders:
+            self.logger.error(
+                "No destination folders configured. Cannot train classifier."
+            )
+            return False
+
+        classifier = self.learn_folders(folders)
+        if classifier is None:
+            self.logger.error(
+                "Learning aborted before a classifier was produced. Aborting training cycle."
+            )
+            return False
+
+        return True
+
     def classify_messages(self, source_folders: List[str]) -> None:
         """Classify and move messages for all source folders
 
@@ -540,8 +560,10 @@ class ISH:
 
     def run(self) -> int:
         settings = self.__settings
-        # initialize next_training so training doesn't always run immediately unless intended
-        next_training = time() + timedelta(hours=24).total_seconds()
+        # schedule training immediately when requested, otherwise wait one interval
+        next_training = (
+            time() if self.train else time() + TRAINING_INTERVAL_SEC
+        )
 
         for f in settings.source_folders:
             self.logger.debug("Source folder: %s", f)
@@ -553,13 +575,19 @@ class ISH:
             return 1
 
         if not os.path.isfile(self.model_file):
-            self.logger.info("No classifier at %s. Going to learning folders.", self.model_file)
-            self._train = True
+            self.logger.info(
+                "No classifier at %s. Going to learning folders.",
+                self.model_file,
+            )
+            if not self._train_on_destination_folders():
+                return 1
+            next_training = time() + TRAINING_INTERVAL_SEC
 
         while not self._exit_event.is_set():
             if self.train and time() >= next_training:
-                next_training: datetime = time() + timedelta(hours=24).total_seconds()
-                self.learn_folders(settings.destination_folders)
+                next_training = time() + TRAINING_INTERVAL_SEC
+                if not self._train_on_destination_folders():
+                    self.logger.error("Training requested but failed.")
 
             self.classify_messages(settings.source_folders)
             if not self.daemon:
