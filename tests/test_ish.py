@@ -142,6 +142,34 @@ def test_init_sets_flags_and_dry_run():
     assert getattr(ish, "_dry_run", None) is True
 
 
+def test_init_runs_migration_when_legacy_cache_exists(monkeypatch, tmp_path):
+    config_dir = tmp_path / "ish_conf"
+    data_dir = config_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "msgs.db").write_text("legacy")
+    monkeypatch.setenv("ISH_CONFIG_PATH", str(config_dir))
+
+    migrate_mock = mock.MagicMock()
+    monkeypatch.setattr(ish_mod, "migrate_legacy_cache", migrate_mock)
+
+    ISH()
+
+    assert migrate_mock.call_count == 1
+
+
+def test_init_skips_migration_without_legacy_cache(monkeypatch, tmp_path):
+    config_dir = tmp_path / "ish_conf"
+    (config_dir / "data").mkdir(parents=True)
+    monkeypatch.setenv("ISH_CONFIG_PATH", str(config_dir))
+
+    migrate_mock = mock.MagicMock()
+    monkeypatch.setattr(ish_mod, "migrate_legacy_cache", migrate_mock)
+
+    ISH()
+
+    migrate_mock.assert_not_called()
+
+
 def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
     fake_settings = SimpleNamespace(
         data_directory="/tmp/data",
@@ -151,6 +179,7 @@ def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
         openai_api_key="key",
         openai_model="text-embedding-ada-002",
     )
+    fake_settings.update_data_settings = lambda: None
     monkeypatch.setattr(ish_mod, "Settings", lambda debug=False: fake_settings)
     
     ish = ISH(dry_run=True, train=True)

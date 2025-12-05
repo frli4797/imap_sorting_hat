@@ -37,6 +37,7 @@ from .imap import ImapHandler
 from .message import Message  # added
 from .settings import Settings
 from .db import SQLiteCache
+from .migrate_shelve_to_sql import migrate as migrate_legacy_cache
 
 # Import batched from itertools if available (Python 3.12+), else define a fallback
 try:
@@ -67,6 +68,7 @@ max_source_messages = 160
 max_learn_messages = 1600
 POLL_TIME_SEC = 30
 TRAINING_INTERVAL_SEC = timedelta(hours=24).total_seconds()
+LEGACY_SHELVE_EXTENSIONS = ("", ".db", ".dat", ".dir", ".bak")
 
 
 def env_to_bool(key: str):
@@ -96,6 +98,7 @@ class ISH:
         if ISH.debug:
             self.logger.setLevel(logging.DEBUG)
         self.__settings = Settings(ISH.debug)
+        self.__settings.update_data_settings()
         self.__client: Optional[OpenAI] = None
         self.__imap_conn: ImapHandler = ImapHandler(self.__settings)
 
@@ -107,6 +110,7 @@ class ISH:
         self.classifier: Optional[RandomForestClassifier] = None
         # sqlite cache placed in data directory
         self._db_file = join(self.__settings.data_directory, "cache.sqlite")
+        self._maybe_migrate_legacy_cache()
         self._cache = SQLiteCache(self._db_file)
 
         self.moved = 0
@@ -145,6 +149,35 @@ class ISH:
     @property
     def interactive(self) -> bool:
         return self._interactive
+
+    def _maybe_migrate_legacy_cache(self) -> None:
+        """Ensure legacy shelve data is imported when cache.sqlite is missing."""
+        if os.path.isfile(self._db_file):
+            return
+
+        if not self._legacy_cache_exists():
+            return
+
+        self.logger.info("cache.sqlite not found; attempting legacy cache migration")
+        try:
+            migrate_legacy_cache(sqlite_path=self._db_file)
+        except Exception:
+            self.logger.exception("Automatic legacy cache migration failed; starting with a fresh cache")
+
+    def _legacy_cache_exists(self) -> bool:
+        data_dir = self.__settings.data_directory
+        for base in ("msgs", "embd"):
+            if self._any_legacy_file_exists(join(data_dir, base)):
+                return True
+        return False
+
+    @staticmethod
+    def _any_legacy_file_exists(base_path: str) -> bool:
+        for ext in LEGACY_SHELVE_EXTENSIONS:
+            candidate = f"{base_path}{ext}" if ext else base_path
+            if os.path.exists(candidate):
+                return True
+        return False
 
     def __connect_openai(self) -> bool:
         if not self.__settings.openai_api_key:

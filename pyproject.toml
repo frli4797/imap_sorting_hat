@@ -1,6 +1,6 @@
 [project]
 name = "imap-sorting-hat"
-version = "0.0.5"
+version = "0.1.0"
 requires-python = ">=3.13"
 
 [build-system]
