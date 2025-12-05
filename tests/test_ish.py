@@ -143,9 +143,19 @@ def test_init_sets_flags_and_dry_run():
 
 
 def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
+    fake_settings = SimpleNamespace(
+        data_directory="/tmp/data",
+        source_folders=["INBOX"],
+        destination_folders=["Important"],
+        ignore_folders=[],
+        openai_api_key="key",
+        openai_model="text-embedding-ada-002",
+    )
+    monkeypatch.setattr(ish_mod, "Settings", lambda debug=False: fake_settings)
+    
     ish = ISH(dry_run=True, train=True)
     # Ensure training has folders to learn from
-    ish._ISH__settings.destination_folders = ["Important"] # type: ignore
+    #ish.__settings["destination_folders"] = ["Important"]
 
     monkeypatch.setattr(os.path, "isfile", lambda path: False)
 
