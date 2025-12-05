@@ -144,6 +144,8 @@ def test_init_sets_flags_and_dry_run():
 
 def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
     ish = ISH(dry_run=True, train=True)
+    # Ensure training has folders to learn from
+    ish._ISH__settings.destination_folders = ["Important"] # type: ignore
 
     monkeypatch.setattr(os.path, "isfile", lambda path: False)
 
