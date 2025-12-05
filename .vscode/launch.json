@@ -50,16 +50,22 @@
       "cwd": "${workspaceFolder}",
       "justMyCode": true,
       "args": [
-        "-v"
+        "-v",
+        "-D",
+        "-l"
       ]
     },
     {
-      "name": "MIgrator",
+      "name": "Migrator",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/migrator.py",
+      "module": "ish.migrate_shelve_to_sql",
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "args": [
+        //"--dry-run"
+      ]
     }
   ]
 }

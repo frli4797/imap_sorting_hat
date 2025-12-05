@@ -1,11 +1,14 @@
+import os
 import types
 from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
+import pytest
 
 import ish.app as ish_mod
 from ish.app import ISH
+from ish.message import Message
 
 
 def make_fake_openai_client():
@@ -83,9 +86,11 @@ def test_classify_messages_moves_high_probability_and_skips_low(monkeypatch):
             # single high probability for class 'dest1'
             return [[0.8, 0.2]]
 
+    test_msg = Message(uid=42, from_addr="alice@example.com", to_addr="bob@example.com", body="Hello world",subject="Test")
+
     ish_instance.classifier = DummyClassifier()
     ish_instance.get_embeddings = mock.MagicMock(return_value={42: np.array([0.1, 0.2, 0.3])})
-    ish_instance.get_msgs = mock.MagicMock(return_value={42: {"from": "alice@example.com", "body": "Hello world"}})
+    ish_instance.get_msgs = mock.MagicMock(return_value={42: test_msg})
     ish_instance.move_messages = mock.MagicMock(return_value=1)
 
     ish_instance.classify_messages(["INBOX"])
@@ -112,7 +117,7 @@ def test_classify_messages_skips_when_probability_low(monkeypatch):
 
     ish_instance.classifier = LowProbClassifier()
     ish_instance.get_embeddings = mock.MagicMock(return_value={99: np.array([0.1])})
-    ish_instance.get_msgs = mock.MagicMock(return_value={99: {"from": "bob", "body": "x"}})
+    ish_instance.get_msgs = mock.MagicMock(return_value={99: Message(uid=99, from_addr="", to_addr="", body="", subject="")})
     ish_instance.move_messages = mock.MagicMock(return_value=0)
 
     ish_instance.classify_messages(["INBOX"])
@@ -126,3 +131,44 @@ def make_handler_with_mock_conn():
     handler._ImapHandler__imap_conn = conn
     return handler, conn
 # Use this helper in tests that exercise __search, fetch, list_folders, etc.
+
+
+def test_init_sets_flags_and_dry_run():
+    ish = ISH(interactive=True, train=True, daemon=True, dry_run=True)
+    assert ish.interactive is True
+    assert ish.train is True
+    assert ish.daemon is True
+    # internal attribute for dry-run exists and was set
+    assert getattr(ish, "_dry_run", None) is True
+
+
+def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
+    fake_settings = SimpleNamespace(
+        data_directory="/tmp/data",
+        source_folders=["INBOX"],
+        destination_folders=["Important"],
+        ignore_folders=[],
+        openai_api_key="key",
+        openai_model="text-embedding-ada-002",
+    )
+    monkeypatch.setattr(ish_mod, "Settings", lambda debug=False: fake_settings)
+    
+    ish = ISH(dry_run=True, train=True)
+    # Ensure training has folders to learn from
+    #ish.__settings["destination_folders"] = ["Important"]
+
+    monkeypatch.setattr(os.path, "isfile", lambda path: False)
+
+    # make connect succeed
+    monkeypatch.setattr(ish, "connect", lambda: True)
+    # stub classify_messages so run doesn't try to use network
+    monkeypatch.setattr(ish, "classify_messages", lambda _: None)
+
+    # replace learn_folders with a mock to confirm it's called
+    learn_mock = mock.MagicMock(return_value="trained")
+    monkeypatch.setattr(ish, "learn_folders", learn_mock)
+
+    rc = ish.run()
+    assert rc == 0
+    # since no model file existed, learn_folders should have been invoked once
+    assert learn_mock.called is True
