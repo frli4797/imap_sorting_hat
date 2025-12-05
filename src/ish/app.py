@@ -17,7 +17,7 @@ import logging
 import os
 import signal
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import Enum
 from os.path import join
 from threading import Event
@@ -435,7 +435,7 @@ class ISH:
         joblib.dump(self.classifier, self.model_file)
         self.logger.debug("Saved classifier.")
         return clf
-    
+
     def _train_on_destination_folders(self) -> bool:
         """Ensure we can train on the configured destination folders."""
         folders = self.__settings.destination_folders
