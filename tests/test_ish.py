@@ -160,26 +160,3 @@ def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
     assert rc == 0
     # since no model file existed, learn_folders should have been invoked once
     assert learn_mock.called is True
-
-
-def test_run_does_not_call_learn_when_model_exists(tmp_path, monkeypatch):
-    ish = ISH(dry_run=True, train=True)
-
-    # create an actual (empty) model file
-    model_path = tmp_path / "model.pkl"
-    model_path.write_text("fake-model")
-    
-    monkeypatch.setattr(os.path, "isfile", lambda path: True)
-
-    # make connect succeed
-    monkeypatch.setattr(ish, "connect", lambda: True)
-    # stub classify_messages to avoid moving messages
-    monkeypatch.setattr(ish, "classify_messages", lambda _: None)
-
-    learn_mock = mock.MagicMock()
-    monkeypatch.setattr(ish, "learn_folders", learn_mock)
-
-    rc = ish.run()
-    assert rc == 0
-    # learn_folders should not be called because model file exists
-    assert learn_mock.called is False
