@@ -22,7 +22,7 @@ from enum import Enum
 from os.path import join
 from threading import Event
 from time import perf_counter, time
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import backoff
 import joblib
@@ -31,149 +31,34 @@ from openai import APIError, APITimeoutError, BadRequestError, OpenAI, RateLimit
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
-from itertools import batched  # Python 3.12+
+try:
+    from itertools import batched  # Python 3.12+
+except ImportError:
+    def batched(iterable, n):
+        it = iter(iterable)
+        while True:
+            batch = []
+            for _ in range(n):
+                try:
+                    batch.append(next(it))
+                except StopIteration:
+                    break
+            if not batch:
+                break
+            yield batch
 
+from . import metrics
 from .imap import ImapHandler
 from .message import Message  # added
 from .settings import Settings
 from .db import SQLiteCache
 from .migrate_shelve_to_sql import migrate as migrate_legacy_cache
 
-try:
-    from prometheus_client import Counter, Gauge, start_http_server
-except ImportError:  # pragma: no cover - prometheus optional in some envs
-    Counter = None
-    Gauge = None
-    start_http_server = None
 
-
-LOG_FORMAT = "%(asctime)s %(levelname)s %(module)s %(message)s"
-DEFAULT_LOG_LEVEL = logging.INFO
-LOG_LEVEL_ENV = "ISH_LOG_LEVEL"
-LOG_LEVELS_ENV = "ISH_LOG_LEVELS"
-METRICS_PORT_ENV = "ISH_METRICS_PORT"
-METRICS_ADDR_ENV = "ISH_METRICS_ADDR"
-_METRICS_SERVER_STARTED = False
-
-MESSAGES_MOVED_COUNTER = (
-    Counter("ish_messages_moved_total", "Total number of messages moved") if Counter else None
-)
-MESSAGES_SKIPPED_COUNTER = (
-    Counter("ish_messages_skipped_total", "Total number of messages skipped") if Counter else None
-)
-TRAINING_EMBEDDINGS_GAUGE = (
-    Gauge("ish_training_embeddings_total", "Embeddings used during last training run") if Gauge else None
-)
-TRAINING_ACCURACY_GAUGE = (
-    Gauge("ish_training_accuracy", "Classifier accuracy from last training run") if Gauge else None
-)
-TRAINING_DURATION_GAUGE = (
-    Gauge("ish_training_duration_seconds", "Seconds spent training the classifier") if Gauge else None
-)
-TRAINING_CLASSIFICATION_GAUGE = (
-    Gauge(
-        "ish_training_classification_metric",
-        "Classification metrics per label and metric",
-        labelnames=("label", "metric"),
-    )
-    if Gauge
-    else None
-)
-
-
-def _configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
-    """Ensure root logging has the expected format/level once."""
-    root_logger = logging.getLogger()
-    formatter = logging.Formatter(LOG_FORMAT)
-    if root_logger.handlers:
-        root_logger.setLevel(level)
-        for handler in root_logger.handlers:
-            handler.setLevel(level)
-            handler.setFormatter(formatter)
-    else:
-        logging.basicConfig(level=level, format=LOG_FORMAT)
-        root_logger = logging.getLogger()
-    _apply_env_logging_overrides(root_logger, formatter)
-
-
-def _apply_env_logging_overrides(root_logger: logging.Logger, formatter: logging.Formatter) -> None:
-    env_level = _parse_log_level(os.environ.get(LOG_LEVEL_ENV))
-    if env_level is not None:
-        root_logger.setLevel(env_level)
-        for handler in root_logger.handlers:
-            handler.setLevel(env_level)
-            handler.setFormatter(formatter)
-
-    for logger_name, level in _parse_named_log_levels(os.environ.get(LOG_LEVELS_ENV)).items():
-        if not logger_name:
-            continue
-        logging.getLogger(logger_name).setLevel(level)
-
-
-def _parse_log_level(raw: Optional[str]) -> Optional[int]:
-    if raw is None:
-        return None
-    value = raw.strip()
-    if not value:
-        return None
-    if value.isdigit():
-        return int(value)
-    name = value.upper()
-    return logging._nameToLevel.get(name)  # type: ignore[attr-defined]
-
-
-def _parse_named_log_levels(raw: Optional[str]) -> Dict[str, int]:
-    overrides: Dict[str, int] = {}
-    if not raw:
-        return overrides
-    for item in raw.split(","):
-        if not item.strip() or "=" not in item:
-            continue
-        name, level_str = item.split("=", 1)
-        parsed = _parse_log_level(level_str)
-        if parsed is not None:
-            overrides[name.strip()] = parsed
-    return overrides
-
-
-def _record_classification_metrics(report: Dict[str, Any]) -> None:
-    if TRAINING_CLASSIFICATION_GAUGE is None:
-        return
-    for label, metrics in report.items():
-        if isinstance(metrics, dict):
-            for metric_name, value in metrics.items():
-                TRAINING_CLASSIFICATION_GAUGE.labels(str(label), metric_name).set(value)
-        else:
-            TRAINING_CLASSIFICATION_GAUGE.labels(str(label), "score").set(metrics)
-
-
-def _start_metrics_server_if_configured() -> None:
-    """Start Prometheus metrics exporter if configured via env vars."""
-    global _METRICS_SERVER_STARTED
-    if _METRICS_SERVER_STARTED or start_http_server is None:
-        return
-    port_raw = os.environ.get(METRICS_PORT_ENV, "9100")
-    if not port_raw:
-        base_logger.warning("No metrics port configured; not starting metrics server")
-        return
-    try:
-        port = int(port_raw)
-    except ValueError:
-        base_logger.warning("Invalid metrics port provided: %s", port_raw)
-        return
-    addr = os.environ.get(METRICS_ADDR_ENV, "0.0.0.0")
-    try:
-        start_http_server(port, addr=addr)
-        _METRICS_SERVER_STARTED = True
-        base_logger.info("Prometheus metrics listening on %s:%s", addr, port)
-    except OSError as exc:
-        base_logger.error("Failed to start metrics server on %s:%s: %s", addr, port, exc)
-
-
-_configure_logging()
+metrics.configure_logging()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 base_logger = logging.getLogger("ish")
-_start_metrics_server_if_configured()
+metrics.start_metrics_server_if_configured()
 
 embed_max_chars = 8192
 max_source_messages = 160
@@ -264,8 +149,7 @@ class ISH:
 
     def _increment_skipped(self, amount: int = 1) -> None:
         self.skipped += amount
-        if MESSAGES_SKIPPED_COUNTER is not None and amount > 0:
-            MESSAGES_SKIPPED_COUNTER.inc(amount)
+        metrics.increment_skipped(amount)
 
     def _maybe_migrate_legacy_cache(self) -> None:
         """Ensure legacy shelve data is imported when cache.sqlite is missing."""
@@ -572,23 +456,18 @@ class ISH:
         self.logger.info("Trained with %i embeddings", len(embed_array))
         self.logger.info("Accuracy: %.2f", accuracy)
         self.logger.info("Classifier: %s", self.classifier)
-        if TRAINING_EMBEDDINGS_GAUGE is not None:
-            TRAINING_EMBEDDINGS_GAUGE.set(len(embed_array))
-        if TRAINING_ACCURACY_GAUGE is not None:
-            TRAINING_ACCURACY_GAUGE.set(accuracy)
 
         y_pred = clf.predict(X_test)
         report_dict = classification_report(y_test, y_pred, labels=folders, output_dict=True)
         class_report = classification_report(y_test, y_pred, labels=folders)
         self.logger.info("Classification Report:")
         self.logger.info("\n%s", class_report)
-        _record_classification_metrics(report_dict)
+        metrics.record_classification_metrics(report_dict)
 
         t2 = perf_counter()
         duration = t2 - t1
         self.logger.debug("Trained classifier in %.2f seconds", duration)
-        if TRAINING_DURATION_GAUGE is not None:
-            TRAINING_DURATION_GAUGE.set(duration)
+        metrics.record_training_stats(len(embed_array), accuracy, duration)
 
         joblib.dump(self.classifier, self.model_file)
         self.logger.info("Saved classifier.")
@@ -750,8 +629,7 @@ class ISH:
                     )
                 moved_count = len(uids)
                 moved += moved_count
-                if MESSAGES_MOVED_COUNTER is not None and moved_count > 0:
-                    MESSAGES_MOVED_COUNTER.inc(moved_count)
+                metrics.increment_moved(moved_count)
             else:
                 self.logger.debug(
                     "Dry run. WOULD have moved UID %s from %s to %s",
