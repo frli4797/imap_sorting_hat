@@ -1,3 +1,4 @@
+import logging
 import os
 import types
 from types import SimpleNamespace
@@ -168,6 +169,60 @@ def test_init_skips_migration_without_legacy_cache(monkeypatch, tmp_path):
     ISH()
 
     migrate_mock.assert_not_called()
+
+
+def test_configure_logging_basicconfig_called_without_handlers(monkeypatch):
+    root = logging.getLogger()
+    prev_handlers = root.handlers[:]
+    prev_level = root.level
+    for handler in prev_handlers:
+        root.removeHandler(handler)
+
+    called = {}
+
+    def fake_basic_config(*, level, format):
+        called["level"] = level
+        called["format"] = format
+
+    monkeypatch.setattr(logging, "basicConfig", fake_basic_config)
+
+    try:
+        ish_mod._configure_logging()
+    finally:
+        # restore previous handlers and level regardless of assertions
+        for handler in root.handlers[:]:
+            root.removeHandler(handler)
+        for handler in prev_handlers:
+            root.addHandler(handler)
+        root.setLevel(prev_level)
+
+    assert called["level"] == ish_mod.DEFAULT_LOG_LEVEL
+    assert called["format"] == ish_mod.LOG_FORMAT
+
+
+def test_configure_logging_updates_existing_handlers(monkeypatch):
+    root = logging.getLogger()
+    prev_handlers = root.handlers[:]
+    prev_level = root.level
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setLevel(logging.WARNING)
+    root.addHandler(handler)
+    root.setLevel(logging.WARNING)
+
+    try:
+        ish_mod._configure_logging()
+        assert handler.level == ish_mod.DEFAULT_LOG_LEVEL
+        assert handler.formatter._style._fmt == ish_mod.LOG_FORMAT
+        assert root.level == ish_mod.DEFAULT_LOG_LEVEL
+    finally:
+        root.removeHandler(handler)
+        for original in prev_handlers:
+            root.addHandler(original)
+        root.setLevel(prev_level)
 
 
 def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):

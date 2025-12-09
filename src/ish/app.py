@@ -57,9 +57,24 @@ except ImportError:
                 break
             yield batch
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(module)s %(message)s"
-)
+LOG_FORMAT = "%(asctime)s %(levelname)s %(module)s %(message)s"
+DEFAULT_LOG_LEVEL = logging.INFO
+
+
+def _configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
+    """Ensure root logging has the expected format/level once."""
+    root_logger = logging.getLogger()
+    formatter = logging.Formatter(LOG_FORMAT)
+    if root_logger.handlers:
+        root_logger.setLevel(level)
+        for handler in root_logger.handlers:
+            handler.setLevel(level)
+            handler.setFormatter(formatter)
+        return
+    logging.basicConfig(level=level, format=LOG_FORMAT)
+
+
+_configure_logging()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 base_logger = logging.getLogger("ish")
 
@@ -95,9 +110,10 @@ class ISH:
     ) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
+        self.__settings = Settings(ISH.debug)
         if ISH.debug:
             self.logger.setLevel(logging.DEBUG)
-        self.__settings = Settings(ISH.debug)
+
         self.__settings.update_data_settings()
         self.__client: Optional[OpenAI] = None
         self.__imap_conn: ImapHandler = ImapHandler(self.__settings)
