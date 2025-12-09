@@ -458,15 +458,15 @@ class ISH:
 
         y_pred = clf.predict(X_test)
         class_report = classification_report(y_test, y_pred, labels=folders)
-        self.logger.debug("Classification Report:")
-        self.logger.debug("\n%s", class_report)
+        self.logger.info("Classification Report:")
+        self.logger.info("\n%s", class_report)
 
         t2 = perf_counter()
 
         self.logger.debug("Trained classifier in %.2f seconds", t2 - t1)
 
         joblib.dump(self.classifier, self.model_file)
-        self.logger.debug("Saved classifier.")
+        self.logger.info("Saved classifier.")
         return clf
 
     def _train_on_destination_folders(self) -> bool:
