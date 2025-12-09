@@ -22,7 +22,7 @@ from enum import Enum
 from os.path import join
 from threading import Event
 from time import perf_counter, time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import backoff
 import joblib
@@ -31,7 +31,7 @@ from openai import APIError, APITimeoutError, BadRequestError, OpenAI, RateLimit
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
-
+from itertools import batched  # Python 3.12+
 
 from .imap import ImapHandler
 from .message import Message  # added
@@ -40,29 +40,12 @@ from .db import SQLiteCache
 from .migrate_shelve_to_sql import migrate as migrate_legacy_cache
 
 try:
-    from prometheus_client import Counter, start_http_server
+    from prometheus_client import Counter, Gauge, start_http_server
 except ImportError:  # pragma: no cover - prometheus optional in some envs
     Counter = None
+    Gauge = None
     start_http_server = None
 
-
-# Import batched from itertools if available (Python 3.12+), else define a fallback
-try:
-    from itertools import batched  # Python 3.12+
-except ImportError:
-    # simple fallback for older Pythons
-    def batched(iterable, n):
-        it = iter(iterable)
-        while True:
-            batch = []
-            for _ in range(n):
-                try:
-                    batch.append(next(it))
-                except StopIteration:
-                    break
-            if not batch:
-                break
-            yield batch
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(module)s %(message)s"
 DEFAULT_LOG_LEVEL = logging.INFO
@@ -77,6 +60,24 @@ MESSAGES_MOVED_COUNTER = (
 )
 MESSAGES_SKIPPED_COUNTER = (
     Counter("ish_messages_skipped_total", "Total number of messages skipped") if Counter else None
+)
+TRAINING_EMBEDDINGS_GAUGE = (
+    Gauge("ish_training_embeddings_total", "Embeddings used during last training run") if Gauge else None
+)
+TRAINING_ACCURACY_GAUGE = (
+    Gauge("ish_training_accuracy", "Classifier accuracy from last training run") if Gauge else None
+)
+TRAINING_DURATION_GAUGE = (
+    Gauge("ish_training_duration_seconds", "Seconds spent training the classifier") if Gauge else None
+)
+TRAINING_CLASSIFICATION_GAUGE = (
+    Gauge(
+        "ish_training_classification_metric",
+        "Classification metrics per label and metric",
+        labelnames=("label", "metric"),
+    )
+    if Gauge
+    else None
 )
 
 
@@ -135,13 +136,25 @@ def _parse_named_log_levels(raw: Optional[str]) -> Dict[str, int]:
     return overrides
 
 
+def _record_classification_metrics(report: Dict[str, Any]) -> None:
+    if TRAINING_CLASSIFICATION_GAUGE is None:
+        return
+    for label, metrics in report.items():
+        if isinstance(metrics, dict):
+            for metric_name, value in metrics.items():
+                TRAINING_CLASSIFICATION_GAUGE.labels(str(label), metric_name).set(value)
+        else:
+            TRAINING_CLASSIFICATION_GAUGE.labels(str(label), "score").set(metrics)
+
+
 def _start_metrics_server_if_configured() -> None:
     """Start Prometheus metrics exporter if configured via env vars."""
     global _METRICS_SERVER_STARTED
     if _METRICS_SERVER_STARTED or start_http_server is None:
         return
-    port_raw = os.environ.get(METRICS_PORT_ENV)
+    port_raw = os.environ.get(METRICS_PORT_ENV, "9100")
     if not port_raw:
+        base_logger.warning("No metrics port configured; not starting metrics server")
         return
     try:
         port = int(port_raw)
@@ -559,15 +572,23 @@ class ISH:
         self.logger.info("Trained with %i embeddings", len(embed_array))
         self.logger.info("Accuracy: %.2f", accuracy)
         self.logger.info("Classifier: %s", self.classifier)
+        if TRAINING_EMBEDDINGS_GAUGE is not None:
+            TRAINING_EMBEDDINGS_GAUGE.set(len(embed_array))
+        if TRAINING_ACCURACY_GAUGE is not None:
+            TRAINING_ACCURACY_GAUGE.set(accuracy)
 
         y_pred = clf.predict(X_test)
+        report_dict = classification_report(y_test, y_pred, labels=folders, output_dict=True)
         class_report = classification_report(y_test, y_pred, labels=folders)
         self.logger.info("Classification Report:")
         self.logger.info("\n%s", class_report)
+        _record_classification_metrics(report_dict)
 
         t2 = perf_counter()
-
-        self.logger.debug("Trained classifier in %.2f seconds", t2 - t1)
+        duration = t2 - t1
+        self.logger.debug("Trained classifier in %.2f seconds", duration)
+        if TRAINING_DURATION_GAUGE is not None:
+            TRAINING_DURATION_GAUGE.set(duration)
 
         joblib.dump(self.classifier, self.model_file)
         self.logger.info("Saved classifier.")

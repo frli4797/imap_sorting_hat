@@ -4,6 +4,7 @@ import types
 from types import SimpleNamespace
 from unittest import mock
 
+import joblib
 import numpy as np
 import pytest
 
@@ -350,3 +351,43 @@ def test_increment_skipped_updates_counter(monkeypatch):
 
     assert ish.skipped == start_value + 3
     counter_mock.inc.assert_called_once_with(3)
+
+
+def test_learn_folders_sets_training_metrics(monkeypatch, tmp_path):
+    config_dir = tmp_path / "ish_conf"
+    monkeypatch.setenv("ISH_CONFIG_PATH", str(config_dir))
+    monkeypatch.setattr(joblib, "dump", lambda *a, **k: None)
+
+    ish = ISH(dry_run=True)
+    gauge_embeddings = mock.MagicMock()
+    gauge_accuracy = mock.MagicMock()
+    gauge_duration = mock.MagicMock()
+    gauge_classification = mock.MagicMock()
+    labels_mock = mock.MagicMock()
+    gauge_classification.labels.return_value = labels_mock
+    monkeypatch.setattr(ish_mod, "TRAINING_EMBEDDINGS_GAUGE", gauge_embeddings)
+    monkeypatch.setattr(ish_mod, "TRAINING_ACCURACY_GAUGE", gauge_accuracy)
+    monkeypatch.setattr(ish_mod, "TRAINING_DURATION_GAUGE", gauge_duration)
+    monkeypatch.setattr(ish_mod, "TRAINING_CLASSIFICATION_GAUGE", gauge_classification)
+
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [1, 2]
+    ish._ISH__imap_conn = fake_imap
+
+    embeddings_map = {
+        "FolderA": {1: np.array([0.1, 0.2]), 2: np.array([0.2, 0.3])},
+        "FolderB": {1: np.array([0.4, 0.5]), 2: np.array([0.6, 0.7])},
+    }
+
+    def fake_get_embeddings(folder, uids):
+        return embeddings_map[folder]
+
+    monkeypatch.setattr(ish, "get_embeddings", fake_get_embeddings)
+
+    clf = ish.learn_folders(["FolderA", "FolderB"])
+    assert clf is not None
+    gauge_embeddings.set.assert_called_once_with(4)
+    gauge_accuracy.set.assert_called_once()
+    gauge_duration.set.assert_called_once()
+    gauge_classification.labels.assert_called()
+    labels_mock.set.assert_called()
