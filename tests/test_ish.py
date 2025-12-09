@@ -1,3 +1,4 @@
+import logging
 import os
 import types
 from types import SimpleNamespace
@@ -36,10 +37,12 @@ def test___get_embeddings_batches_calls_api_multiple_times():
     assert ish._ISH__client.embeddings.create.call_count == 2
 
 
-def test_move_messages_dry_run_does_not_call_imap_move():
+def test_move_messages_dry_run_does_not_call_imap_move(monkeypatch):
     ish = ISH(dry_run=True)
     mock_conn = mock.MagicMock()
     ish._ISH__imap_conn = mock_conn
+    counter_mock = mock.MagicMock()
+    monkeypatch.setattr(ish_mod, "MESSAGES_MOVED_COUNTER", counter_mock)
 
     messages = {
         "A": [{"uid": 1}, {"uid": 2}],
@@ -50,12 +53,15 @@ def test_move_messages_dry_run_does_not_call_imap_move():
     # Dry run should not call IMAP client's move method
     mock_conn.move.assert_not_called()
     assert moved == 0
+    counter_mock.inc.assert_not_called()
 
 
-def test_move_messages_calls_imap_move_when_not_dry_run():
+def test_move_messages_calls_imap_move_when_not_dry_run(monkeypatch):
     ish = ISH(dry_run=False)
     mock_conn = mock.MagicMock()
     ish._ISH__imap_conn = mock_conn
+    counter_mock = mock.MagicMock()
+    monkeypatch.setattr(ish_mod, "MESSAGES_MOVED_COUNTER", counter_mock)
 
     messages = {
         "X": [{"uid": 10}, {"uid": 11}],
@@ -66,6 +72,103 @@ def test_move_messages_calls_imap_move_when_not_dry_run():
         "SRC", [10, 11], "X", flag_messages=ish.interactive, flag_unseen=not ish.interactive
     )
     assert moved == 2
+    counter_mock.inc.assert_called_once_with(2)
+
+
+def test_configure_logging_basicconfig_called_without_handlers(monkeypatch):
+    root = logging.getLogger()
+    prev_handlers = root.handlers[:]
+    prev_level = root.level
+    for handler in prev_handlers:
+        root.removeHandler(handler)
+
+    called = {}
+
+    def fake_basic_config(*, level, format):
+        called["level"] = level
+        called["format"] = format
+
+    monkeypatch.setattr(logging, "basicConfig", fake_basic_config)
+
+    try:
+        ish_mod._configure_logging()
+    finally:
+        for handler in root.handlers[:]:
+            root.removeHandler(handler)
+        for handler in prev_handlers:
+            root.addHandler(handler)
+        root.setLevel(prev_level)
+
+    assert called["level"] == ish_mod.DEFAULT_LOG_LEVEL
+    assert called["format"] == ish_mod.LOG_FORMAT
+
+
+def test_configure_logging_updates_existing_handlers(monkeypatch):
+    root = logging.getLogger()
+    prev_handlers = root.handlers[:]
+    prev_level = root.level
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setLevel(logging.WARNING)
+    root.addHandler(handler)
+    root.setLevel(logging.WARNING)
+
+    try:
+        ish_mod._configure_logging()
+        assert handler.level == ish_mod.DEFAULT_LOG_LEVEL
+        assert handler.formatter._style._fmt == ish_mod.LOG_FORMAT
+        assert root.level == ish_mod.DEFAULT_LOG_LEVEL
+    finally:
+        root.removeHandler(handler)
+        for original in prev_handlers:
+            root.addHandler(original)
+        root.setLevel(prev_level)
+
+
+def test_env_log_level_overrides_root_and_handlers(monkeypatch):
+    root = logging.getLogger()
+    prev_handlers = root.handlers[:]
+    prev_level = root.level
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setLevel(logging.INFO)
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    monkeypatch.setenv(ish_mod.LOG_LEVEL_ENV, "DEBUG")
+
+    try:
+        ish_mod._configure_logging()
+        assert root.level == logging.DEBUG
+        assert handler.level == logging.DEBUG
+    finally:
+        monkeypatch.delenv(ish_mod.LOG_LEVEL_ENV, raising=False)
+        root.removeHandler(handler)
+        for original in prev_handlers:
+            root.addHandler(original)
+        root.setLevel(prev_level)
+
+
+def test_env_named_log_levels_override_specific_loggers(monkeypatch):
+    target_a = logging.getLogger("ISH")
+    target_b = logging.getLogger("ish.imap")
+    prev_a = target_a.level
+    prev_b = target_b.level
+    monkeypatch.setenv(ish_mod.LOG_LEVELS_ENV, "ISH=DEBUG,ish.imap=WARNING,invalid")
+
+    try:
+        ish_mod._configure_logging()
+        assert target_a.level == logging.DEBUG
+        assert target_b.level == logging.WARNING
+    finally:
+        monkeypatch.delenv(ish_mod.LOG_LEVELS_ENV, raising=False)
+        target_a.setLevel(prev_a)
+        target_b.setLevel(prev_b)
 
 
 def test_classify_messages_moves_high_probability_and_skips_low(monkeypatch):
@@ -201,3 +304,49 @@ def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
     assert rc == 0
     # since no model file existed, learn_folders should have been invoked once
     assert learn_mock.called is True
+
+
+def test_metrics_server_starts_when_env_set(monkeypatch):
+    prev_started = ish_mod._METRICS_SERVER_STARTED
+    monkeypatch.setattr(ish_mod, "_METRICS_SERVER_STARTED", False)
+    fake_start = mock.MagicMock()
+    monkeypatch.setattr(ish_mod, "start_http_server", fake_start)
+    monkeypatch.setenv("ISH_METRICS_PORT", "9410")
+    monkeypatch.setenv("ISH_METRICS_ADDR", "127.0.0.1")
+
+    ish_mod._start_metrics_server_if_configured()
+
+    fake_start.assert_called_once_with(9410, addr="127.0.0.1")
+    assert ish_mod._METRICS_SERVER_STARTED is True
+
+    monkeypatch.delenv("ISH_METRICS_PORT", raising=False)
+    monkeypatch.delenv("ISH_METRICS_ADDR", raising=False)
+    monkeypatch.setattr(ish_mod, "_METRICS_SERVER_STARTED", prev_started)
+
+
+def test_metrics_server_invalid_port(monkeypatch):
+    prev_started = ish_mod._METRICS_SERVER_STARTED
+    monkeypatch.setattr(ish_mod, "_METRICS_SERVER_STARTED", False)
+    fake_start = mock.MagicMock()
+    monkeypatch.setattr(ish_mod, "start_http_server", fake_start)
+    monkeypatch.setenv("ISH_METRICS_PORT", "not-a-port")
+
+    ish_mod._start_metrics_server_if_configured()
+
+    fake_start.assert_not_called()
+    assert ish_mod._METRICS_SERVER_STARTED is False
+
+    monkeypatch.delenv("ISH_METRICS_PORT", raising=False)
+    monkeypatch.setattr(ish_mod, "_METRICS_SERVER_STARTED", prev_started)
+
+
+def test_increment_skipped_updates_counter(monkeypatch):
+    ish = ISH(dry_run=True)
+    counter_mock = mock.MagicMock()
+    monkeypatch.setattr(ish_mod, "MESSAGES_SKIPPED_COUNTER", counter_mock)
+    start_value = ish.skipped
+
+    ish._increment_skipped(3)
+
+    assert ish.skipped == start_value + 3
+    counter_mock.inc.assert_called_once_with(3)

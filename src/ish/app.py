@@ -39,6 +39,13 @@ from .settings import Settings
 from .db import SQLiteCache
 from .migrate_shelve_to_sql import migrate as migrate_legacy_cache
 
+try:
+    from prometheus_client import Counter, start_http_server
+except ImportError:  # pragma: no cover - prometheus optional in some envs
+    Counter = None
+    start_http_server = None
+
+
 # Import batched from itertools if available (Python 3.12+), else define a fallback
 try:
     from itertools import batched  # Python 3.12+
@@ -57,11 +64,103 @@ except ImportError:
                 break
             yield batch
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(module)s %(message)s"
+LOG_FORMAT = "%(asctime)s %(levelname)s %(module)s %(message)s"
+DEFAULT_LOG_LEVEL = logging.INFO
+LOG_LEVEL_ENV = "ISH_LOG_LEVEL"
+LOG_LEVELS_ENV = "ISH_LOG_LEVELS"
+METRICS_PORT_ENV = "ISH_METRICS_PORT"
+METRICS_ADDR_ENV = "ISH_METRICS_ADDR"
+_METRICS_SERVER_STARTED = False
+
+MESSAGES_MOVED_COUNTER = (
+    Counter("ish_messages_moved_total", "Total number of messages moved") if Counter else None
 )
+MESSAGES_SKIPPED_COUNTER = (
+    Counter("ish_messages_skipped_total", "Total number of messages skipped") if Counter else None
+)
+
+
+def _configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
+    """Ensure root logging has the expected format/level once."""
+    root_logger = logging.getLogger()
+    formatter = logging.Formatter(LOG_FORMAT)
+    if root_logger.handlers:
+        root_logger.setLevel(level)
+        for handler in root_logger.handlers:
+            handler.setLevel(level)
+            handler.setFormatter(formatter)
+    else:
+        logging.basicConfig(level=level, format=LOG_FORMAT)
+        root_logger = logging.getLogger()
+    _apply_env_logging_overrides(root_logger, formatter)
+
+
+def _apply_env_logging_overrides(root_logger: logging.Logger, formatter: logging.Formatter) -> None:
+    env_level = _parse_log_level(os.environ.get(LOG_LEVEL_ENV))
+    if env_level is not None:
+        root_logger.setLevel(env_level)
+        for handler in root_logger.handlers:
+            handler.setLevel(env_level)
+            handler.setFormatter(formatter)
+
+    for logger_name, level in _parse_named_log_levels(os.environ.get(LOG_LEVELS_ENV)).items():
+        if not logger_name:
+            continue
+        logging.getLogger(logger_name).setLevel(level)
+
+
+def _parse_log_level(raw: Optional[str]) -> Optional[int]:
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value)
+    name = value.upper()
+    return logging._nameToLevel.get(name)  # type: ignore[attr-defined]
+
+
+def _parse_named_log_levels(raw: Optional[str]) -> Dict[str, int]:
+    overrides: Dict[str, int] = {}
+    if not raw:
+        return overrides
+    for item in raw.split(","):
+        if not item.strip() or "=" not in item:
+            continue
+        name, level_str = item.split("=", 1)
+        parsed = _parse_log_level(level_str)
+        if parsed is not None:
+            overrides[name.strip()] = parsed
+    return overrides
+
+
+def _start_metrics_server_if_configured() -> None:
+    """Start Prometheus metrics exporter if configured via env vars."""
+    global _METRICS_SERVER_STARTED
+    if _METRICS_SERVER_STARTED or start_http_server is None:
+        return
+    port_raw = os.environ.get(METRICS_PORT_ENV)
+    if not port_raw:
+        return
+    try:
+        port = int(port_raw)
+    except ValueError:
+        base_logger.warning("Invalid metrics port provided: %s", port_raw)
+        return
+    addr = os.environ.get(METRICS_ADDR_ENV, "0.0.0.0")
+    try:
+        start_http_server(port, addr=addr)
+        _METRICS_SERVER_STARTED = True
+        base_logger.info("Prometheus metrics listening on %s:%s", addr, port)
+    except OSError as exc:
+        base_logger.error("Failed to start metrics server on %s:%s: %s", addr, port, exc)
+
+
+_configure_logging()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 base_logger = logging.getLogger("ish")
+_start_metrics_server_if_configured()
 
 embed_max_chars = 8192
 max_source_messages = 160
@@ -149,6 +248,11 @@ class ISH:
     @property
     def interactive(self) -> bool:
         return self._interactive
+
+    def _increment_skipped(self, amount: int = 1) -> None:
+        self.skipped += amount
+        if MESSAGES_SKIPPED_COUNTER is not None and amount > 0:
+            MESSAGES_SKIPPED_COUNTER.inc(amount)
 
     def _maybe_migrate_legacy_cache(self) -> None:
         """Ensure legacy shelve data is imported when cache.sqlite is missing."""
@@ -540,7 +644,7 @@ class ISH:
                     if self.interactive:
                         answer = self.__select_move(dest_folder)
                         if answer == Action.NO:
-                            self.skipped += 1
+                            self._increment_skipped()
                             continue
                         elif answer == Action.QUIT:
                             self.logger.info("User requested quit; stopping classification.")
@@ -557,7 +661,7 @@ class ISH:
                     self._log_move(
                         uid, "Skipping due to probability", ranks, mess_to_move
                     )
-                    self.skipped += 1
+                    self._increment_skipped()
 
             if stop_processing or self._exit_event.is_set():
                 break
@@ -623,7 +727,10 @@ class ISH:
                         flag_messages=self.interactive,
                         flag_unseen=not self.interactive,
                     )
-                moved += len(uids)
+                moved_count = len(uids)
+                moved += moved_count
+                if MESSAGES_MOVED_COUNTER is not None and moved_count > 0:
+                    MESSAGES_MOVED_COUNTER.inc(moved_count)
             else:
                 self.logger.debug(
                     "Dry run. WOULD have moved UID %s from %s to %s",
