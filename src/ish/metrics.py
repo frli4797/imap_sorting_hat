@@ -103,7 +103,7 @@ def start_metrics_server_if_configured() -> None:
     global _METRICS_SERVER_STARTED
     if _METRICS_SERVER_STARTED or start_http_server is None:
         return
-    port_raw = os.environ.get(METRICS_PORT_ENV)
+    port_raw = os.environ.get(METRICS_PORT_ENV, "9100")
     if not port_raw:
         return
     try:
