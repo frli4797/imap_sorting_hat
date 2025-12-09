@@ -10,6 +10,15 @@ on:
   pull_request:
     branches:
       - main      
+  workflow_dispatch:
+    inputs:
+      push_to_docker:
+        description: "Build and push Docker images as part of this run"
+        required: false
+        default: "true"
+      edge_tag:
+        description: "Docker tag to use when manually pushing (defaults to edge or branch-based)"
+        required: false
 
 jobs:
   test:
@@ -39,8 +48,8 @@ jobs:
 
   
   build:
-    # Only build/push for main (edge builds)
-    if: github.ref == 'refs/heads/main'
+    # Only build/push automatically for main, or manually when requested
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.push_to_docker == 'true')
     needs: test
     runs-on: ubuntu-latest
 
@@ -64,8 +73,19 @@ jobs:
         id: vars
         run: |
           SHORT_SHA=${GITHUB_SHA::7}
-          echo "edge_tag=edge" >> $GITHUB_OUTPUT
-          echo "sha_tag=main-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          EDGE_TAG_INPUT="${{ github.event.inputs.edge_tag }}"
+          if [ -z "$EDGE_TAG_INPUT" ]; then
+            if [ "${{ github.ref == 'refs/heads/main' }}" = "true" ]; then
+              EDGE_TAG="edge"
+            else
+              EDGE_TAG="edge-$(echo "${GITHUB_REF_NAME}" | tr '/' '-')"
+            fi
+          else
+            EDGE_TAG="$EDGE_TAG_INPUT"
+          fi
+          BRANCH_SAFE=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          echo "edge_tag=${EDGE_TAG}" >> $GITHUB_OUTPUT
+          echo "sha_tag=${BRANCH_SAFE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
 
       - name: Build and push (main)
         uses: docker/build-push-action@v6
