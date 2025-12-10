@@ -85,8 +85,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.version }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:edge
-          cache-to: type=inline
+          cache-from: type=gha,scope=ish-builder
+          cache-to: type=gha,mode=max,scope=ish-builder
 
       - name: Push latest tag (only if allowed)
         if: steps.vars.outputs.skip_latest == 'false'
@@ -96,5 +96,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ${{ env.IMAGE_NAME }}:latest
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:edge
-          cache-to: type=inline
+          cache-from: type=gha,scope=ish-builder
+          cache-to: type=gha,mode=max,scope=ish-builder

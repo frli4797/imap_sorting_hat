@@ -102,5 +102,5 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.edge_tag }}
             ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_tag }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:edge
-          cache-to: type=inline
+          cache-from: type=gha,scope=ish-builder
+          cache-to: type=gha,mode=max,scope=ish-builder
