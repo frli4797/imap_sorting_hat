@@ -3,10 +3,12 @@ import types
 from types import SimpleNamespace
 from unittest import mock
 
+import joblib
 import numpy as np
 import pytest
 
 import ish.app as ish_mod
+from ish import metrics as metrics_mod
 from ish.app import ISH
 from ish.message import Message
 
@@ -66,6 +68,8 @@ def test_move_messages_calls_imap_move_when_not_dry_run():
         "SRC", [10, 11], "X", flag_messages=ish.interactive, flag_unseen=not ish.interactive
     )
     assert moved == 2
+
+
 
 
 def test_classify_messages_moves_high_probability_and_skips_low(monkeypatch):
@@ -201,3 +205,4 @@ def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
     assert rc == 0
     # since no model file existed, learn_folders should have been invoked once
     assert learn_mock.called is True
+

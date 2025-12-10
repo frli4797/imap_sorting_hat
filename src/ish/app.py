@@ -31,19 +31,9 @@ from openai import APIError, APITimeoutError, BadRequestError, OpenAI, RateLimit
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
-
-
-from .imap import ImapHandler
-from .message import Message  # added
-from .settings import Settings
-from .db import SQLiteCache
-from .migrate_shelve_to_sql import migrate as migrate_legacy_cache
-
-# Import batched from itertools if available (Python 3.12+), else define a fallback
 try:
     from itertools import batched  # Python 3.12+
 except ImportError:
-    # simple fallback for older Pythons
     def batched(iterable, n):
         it = iter(iterable)
         while True:
@@ -57,11 +47,18 @@ except ImportError:
                 break
             yield batch
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(module)s %(message)s"
-)
+from . import metrics
+from .imap import ImapHandler
+from .message import Message  # added
+from .settings import Settings
+from .db import SQLiteCache
+from .migrate_shelve_to_sql import migrate as migrate_legacy_cache
+
+
+metrics.configure_logging()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 base_logger = logging.getLogger("ish")
+metrics.start_metrics_server_if_configured()
 
 embed_max_chars = 8192
 max_source_messages = 160
@@ -149,6 +146,10 @@ class ISH:
     @property
     def interactive(self) -> bool:
         return self._interactive
+
+    def _increment_skipped(self, amount: int = 1) -> None:
+        self.skipped += amount
+        metrics.increment_skipped(amount)
 
     def _maybe_migrate_legacy_cache(self) -> None:
         """Ensure legacy shelve data is imported when cache.sqlite is missing."""
@@ -457,13 +458,16 @@ class ISH:
         self.logger.info("Classifier: %s", self.classifier)
 
         y_pred = clf.predict(X_test)
+        report_dict = classification_report(y_test, y_pred, labels=folders, output_dict=True)
         class_report = classification_report(y_test, y_pred, labels=folders)
         self.logger.info("Classification Report:")
         self.logger.info("\n%s", class_report)
+        metrics.record_classification_metrics(report_dict)
 
         t2 = perf_counter()
-
-        self.logger.debug("Trained classifier in %.2f seconds", t2 - t1)
+        duration = t2 - t1
+        self.logger.debug("Trained classifier in %.2f seconds", duration)
+        metrics.record_training_stats(len(embed_array), accuracy, duration)
 
         joblib.dump(self.classifier, self.model_file)
         self.logger.info("Saved classifier.")
@@ -540,7 +544,7 @@ class ISH:
                     if self.interactive:
                         answer = self.__select_move(dest_folder)
                         if answer == Action.NO:
-                            self.skipped += 1
+                            self._increment_skipped()
                             continue
                         elif answer == Action.QUIT:
                             self.logger.info("User requested quit; stopping classification.")
@@ -557,7 +561,7 @@ class ISH:
                     self._log_move(
                         uid, "Skipping due to probability", ranks, mess_to_move
                     )
-                    self.skipped += 1
+                    self._increment_skipped()
 
             if stop_processing or self._exit_event.is_set():
                 break
@@ -623,7 +627,9 @@ class ISH:
                         flag_messages=self.interactive,
                         flag_unseen=not self.interactive,
                     )
-                moved += len(uids)
+                moved_count = len(uids)
+                moved += moved_count
+                metrics.increment_moved(moved_count)
             else:
                 self.logger.debug(
                     "Dry run. WOULD have moved UID %s from %s to %s",
