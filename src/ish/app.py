@@ -109,6 +109,7 @@ class ISH:
         self._db_file = join(self.__settings.data_directory, "cache.sqlite")
         self._maybe_migrate_legacy_cache()
         self._cache = SQLiteCache(self._db_file)
+        metrics.record_db_size(self._db_file)
 
         self.moved = 0
         self.skipped = 0
@@ -527,6 +528,7 @@ class ISH:
                 uids = imap_conn.search(folder, ["ALL"])
 
             embd = self.get_embeddings(folder, uids[:max_source_messages])
+            metrics.record_folder_embedding_count(folder, len(embd))
             mesgs = self.get_msgs(folder, uids[:max_source_messages])
 
             to_move: dict[str, list] = {}
@@ -672,8 +674,9 @@ class ISH:
                 next_training = time() + TRAINING_INTERVAL_SEC
                 if not self._train_on_destination_folders():
                     self.logger.error("Training requested but failed.")
-
             self.classify_messages(settings.source_folders)
+            metrics.record_db_size(self._db_file)
+            
             if not self.daemon:
                 break
             self._exit_event.wait(POLL_TIME_SEC)
@@ -689,6 +692,7 @@ class ISH:
                 pass
             finally:
                 self._cache = None
+                metrics.record_db_size(self._db_file)
 
         if self.__imap_conn is not None:
             try:

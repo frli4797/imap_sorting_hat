@@ -167,3 +167,27 @@ def test_record_classification_metrics(monkeypatch):
     gauge.labels.assert_any_call("label1", "precision")
     gauge.labels.assert_any_call("label1", "recall")
     labels_mock.set.assert_called()
+
+
+def test_record_folder_embedding_count(monkeypatch):
+    gauge = mock.MagicMock()
+    labels_mock = mock.MagicMock()
+    gauge.labels.return_value = labels_mock
+    monkeypatch.setattr(metrics, "CLASSIFY_FOLDER_EMBEDDINGS_GAUGE", gauge)
+
+    metrics.record_folder_embedding_count("Inbox", 5)
+
+    gauge.labels.assert_called_once_with("Inbox")
+    labels_mock.set.assert_called_once_with(5)
+
+
+def test_record_db_size(monkeypatch, tmp_path):
+    gauge = mock.MagicMock()
+    monkeypatch.setattr(metrics, "DB_SIZE_GAUGE", gauge)
+
+    db_file = tmp_path / "cache.sqlite"
+    db_file.write_bytes(b"123456789")
+
+    metrics.record_db_size(str(db_file))
+
+    gauge.set.assert_called_once_with(9)
