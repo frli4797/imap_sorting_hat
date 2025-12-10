@@ -41,6 +41,18 @@ TRAINING_CLASSIFICATION_GAUGE = (
     if Gauge
     else None
 )
+CLASSIFY_FOLDER_EMBEDDINGS_GAUGE = (
+    Gauge(
+        "ish_classify_folder_embeddings_total",
+        "Number of embeddings considered per folder during classification",
+        labelnames=("folder",),
+    )
+    if Gauge
+    else None
+)
+DB_SIZE_GAUGE = (
+    Gauge("ish_cache_db_size_bytes", "Size of the cache sqlite DB on disk in bytes") if Gauge else None
+)
 
 
 def configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
@@ -151,3 +163,18 @@ def record_classification_metrics(report: Dict[str, Any]) -> None:
         else:
             TRAINING_CLASSIFICATION_GAUGE.labels(str(label), "score").set(metrics)
 
+
+def record_folder_embedding_count(folder: str, count: int) -> None:
+    if CLASSIFY_FOLDER_EMBEDDINGS_GAUGE is None:
+        return
+    CLASSIFY_FOLDER_EMBEDDINGS_GAUGE.labels(folder).set(count)
+
+
+def record_db_size(path: str) -> None:
+    if DB_SIZE_GAUGE is None:
+        return
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return
+    DB_SIZE_GAUGE.set(size)
