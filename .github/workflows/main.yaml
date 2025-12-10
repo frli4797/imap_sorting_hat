@@ -102,5 +102,6 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.edge_tag }}
             ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_tag }}
+          # Caching to speed up builds
           cache-from: type=gha,scope=ish-builder
           cache-to: type=gha,mode=max,scope=ish-builder
