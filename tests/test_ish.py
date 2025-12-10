@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 import ish.app as ish_mod
-from ish import metrics as metrics_mod
 from ish.app import ISH
 from ish.message import Message
 
@@ -206,3 +205,25 @@ def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
     # since no model file existed, learn_folders should have been invoked once
     assert learn_mock.called is True
 
+
+def test_learn_folders_uses_cached_embeddings(monkeypatch, tmp_path):
+    config_dir = tmp_path / "ish_conf"
+    monkeypatch.setenv("ISH_CONFIG_PATH", str(config_dir))
+    monkeypatch.setattr(joblib, "dump", lambda *a, **k: None)
+
+    ish = ISH(dry_run=True)
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = []
+    ish._ISH__imap_conn = fake_imap
+    monkeypatch.setattr(ish, "get_embeddings", lambda folder, uids: {})
+
+    folders = ["FolderA", "FolderB"]
+    for folder_idx, folder in enumerate(folders):
+        for sample_idx in range(3):
+            uid = folder_idx * 10 + sample_idx
+            msg = Message(uid=uid, from_addr="a", to_addr="b", subject="s", body=f"body-{folder_idx}-{sample_idx}")
+            msg_hash = ish._cache.store_message(folder, uid, msg)
+            ish._cache.store_embedding(msg_hash, np.array([float(uid), float(sample_idx)]))
+
+    clf = ish.learn_folders(folders)
+    assert clf is not None

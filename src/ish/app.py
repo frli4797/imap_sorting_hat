@@ -414,6 +414,9 @@ class ISH:
             # Retrieve the UIDs of all messages in the folder
             uids = imap_conn.search(folder, ["ALL"])
             embd = self.get_embeddings(folder, uids[:max_learn_messages])
+            cached_embd = self._cache.get_folder_embeddings(folder)
+            for uid, emb in cached_embd.items():
+                embd.setdefault(uid, emb)
             if len(embd) == 0:
                 self.logger.warning("No embeddings available for folder %s; skipping.", folder)
                 continue

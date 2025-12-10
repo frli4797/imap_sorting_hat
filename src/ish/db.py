@@ -132,3 +132,20 @@ class SQLiteCache:
             (msg_hash, sqlite3.Binary(pickled)),
         )
         self.conn.commit()
+
+    def get_folder_embeddings(self, folder: str) -> Dict[int, np.ndarray]:
+        """Return all cached embeddings for a folder keyed by UID."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT fm.uid, e.data
+            FROM folder_messages fm
+            JOIN embeddings e ON fm.msg_hash = e.msg_hash
+            WHERE fm.folder = ?
+            """,
+            (folder,),
+        )
+        out: Dict[int, np.ndarray] = {}
+        for uid, data in cur.fetchall():
+            out[int(uid)] = pickle.loads(data)
+        return out
