@@ -93,7 +93,7 @@ class Settings(dict):
             self.logger.info("Settings saved to %s", self.settings_file)
 
     def __init__(self, debug=False):
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger("ish").getChild(self.__class__.__name__)
         if debug:
             self.logger.setLevel(logging.DEBUG)
 

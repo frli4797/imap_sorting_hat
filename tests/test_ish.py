@@ -94,10 +94,10 @@ def test_classify_messages_moves_high_probability_and_skips_low(monkeypatch):
     ish_instance.classifier = DummyClassifier()
     ish_instance.get_embeddings = mock.MagicMock(return_value={42: np.array([0.1, 0.2, 0.3])})
     ish_instance.get_msgs = mock.MagicMock(return_value={42: test_msg})
-    ish_instance.move_messages = mock.MagicMock(return_value=1)
+    ish_instance._classification_service.move_messages = mock.MagicMock(return_value=1)
 
     ish_instance.classify_messages(["INBOX"])
-    ish_instance.move_messages.assert_called()
+    ish_instance._classification_service.move_messages.assert_called()
     assert ish_instance.moved >= 0
 
 
@@ -121,11 +121,11 @@ def test_classify_messages_skips_when_probability_low(monkeypatch):
     ish_instance.classifier = LowProbClassifier()
     ish_instance.get_embeddings = mock.MagicMock(return_value={99: np.array([0.1])})
     ish_instance.get_msgs = mock.MagicMock(return_value={99: Message(uid=99, from_addr="", to_addr="", body="", subject="")})
-    ish_instance.move_messages = mock.MagicMock(return_value=0)
+    ish_instance._classification_service.move_messages = mock.MagicMock(return_value=0)
 
     ish_instance.classify_messages(["INBOX"])
     assert ish_instance.skipped >= 1
-    ish_instance.move_messages.assert_called()
+    ish_instance._classification_service.move_messages.assert_called()
 
 
 def make_handler_with_mock_conn():

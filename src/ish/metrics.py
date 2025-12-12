@@ -67,47 +67,6 @@ def configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
     else:
         logging.basicConfig(level=level, format=LOG_FORMAT)
         root_logger = logging.getLogger()
-    _apply_env_logging_overrides(root_logger, formatter)
-
-
-def _apply_env_logging_overrides(root_logger: logging.Logger, formatter: logging.Formatter) -> None:
-    env_level = _parse_log_level(os.environ.get(LOG_LEVEL_ENV))
-    if env_level is not None:
-        root_logger.setLevel(env_level)
-        for handler in root_logger.handlers:
-            handler.setLevel(env_level)
-            handler.setFormatter(formatter)
-
-    for logger_name, level in _parse_named_log_levels(os.environ.get(LOG_LEVELS_ENV)).items():
-        if not logger_name:
-            continue
-        logging.getLogger(logger_name).setLevel(level)
-
-
-def _parse_log_level(raw: Optional[str]) -> Optional[int]:
-    if raw is None:
-        return None
-    value = raw.strip()
-    if not value:
-        return None
-    if value.isdigit():
-        return int(value)
-    name = value.upper()
-    return logging._nameToLevel.get(name)  # type: ignore[attr-defined]
-
-
-def _parse_named_log_levels(raw: Optional[str]) -> Dict[str, int]:
-    overrides: Dict[str, int] = {}
-    if not raw:
-        return overrides
-    for item in raw.split(","):
-        if not item.strip() or "=" not in item:
-            continue
-        name, level_str = item.split("=", 1)
-        parsed = _parse_log_level(level_str)
-        if parsed is not None:
-            overrides[name.strip()] = parsed
-    return overrides
 
 
 def start_metrics_server_if_configured() -> None:
