@@ -22,6 +22,7 @@ from os.path import join
 from threading import Event
 from time import time
 from typing import Dict, List, Optional
+from pytimeparse.timeparse import timeparse
 
 import backoff
 import numpy as np
@@ -47,9 +48,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 base_logger = logging.getLogger("ish")
 metrics.start_metrics_server_if_configured()
 
-embed_max_chars = 8192
-max_source_messages = 160
-max_learn_messages = 1600
+EMBED_MAX_CHARS = 8192
+MAX_SOURCE_MESSAGES = 160
+MAX_LEARN_MESSAGES = 1600
 POLL_TIME_SEC = 30
 TRAINING_INTERVAL_SEC = timedelta(hours=24).total_seconds()
 LEGACY_SHELVE_EXTENSIONS = ("", ".db", ".dat", ".dir", ".bak")
@@ -102,7 +103,7 @@ class ISH:
             cache=self._cache,
             message_repository=self._message_repository,
             embedder=lambda texts: self.__get_embeddings(texts),
-            max_chars=embed_max_chars,
+            max_chars=EMBED_MAX_CHARS,
             data_directory=self.__settings.data_directory
         )
         self._training_manager = TrainingManager(
@@ -110,7 +111,7 @@ class ISH:
             get_embeddings=lambda folder, uids: self.get_embeddings(folder, uids),
             get_cache_embeddings=self._cache.get_folder_embeddings,
             model_file=self.model_file,
-            max_learn_messages=max_learn_messages,
+            max_learn_messages=MAX_LEARN_MESSAGES,
             exit_event=self._exit_event
         )
         self._classification_service = ClassificationService(
@@ -118,7 +119,7 @@ class ISH:
             get_embeddings=lambda folder, uids: self.get_embeddings(folder, uids),
             get_messages=lambda folder, uids: self.get_msgs(folder, uids),
             model_file=self.model_file,
-            max_source_messages=max_source_messages,
+            max_source_messages=MAX_SOURCE_MESSAGES,
             interactive=self._interactive,
             dry_run=self._dry_run,
             exit_event=self._exit_event
