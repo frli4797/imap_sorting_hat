@@ -41,7 +41,7 @@ _BATCH_SIZE = 40
 HEADER_KEY = b"BODY[HEADER.FIELDS (SUBJECT FROM TO CC BCC)]"
 BODY_KEY = b"BODY[]"
 
-base_logger = logging.getLogger("imap")
+base_logger = logging.getLogger("ish").getChild("imap")
 
 
 def html2text(html: str) -> str:
@@ -96,7 +96,7 @@ class ImapHandler:
     def __init__(self, settings: Settings, readonly=False) -> None:
         self.__settings = settings
         self.__imap_conn = None
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger("ish").getChild(self.__class__.__name__)
         self.__readonly = readonly
         self.__capabilities = None
 

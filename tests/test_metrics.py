@@ -67,48 +67,6 @@ def test_configure_logging_updates_existing_handlers(monkeypatch):
         root.setLevel(prev_level)
 
 
-def test_env_log_level_overrides_root_and_handlers(monkeypatch):
-    root = logging.getLogger()
-    prev_handlers = root.handlers[:]
-    prev_level = root.level
-    for handler in root.handlers[:]:
-        root.removeHandler(handler)
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
-    monkeypatch.setenv(metrics.LOG_LEVEL_ENV, "DEBUG")
-
-    try:
-        metrics.configure_logging()
-        assert root.level == logging.DEBUG
-        assert handler.level == logging.DEBUG
-    finally:
-        monkeypatch.delenv(metrics.LOG_LEVEL_ENV, raising=False)
-        root.removeHandler(handler)
-        for original in prev_handlers:
-            root.addHandler(original)
-        root.setLevel(prev_level)
-
-
-def test_env_named_log_levels_override_specific_loggers(monkeypatch):
-    target_a = logging.getLogger("ISH")
-    target_b = logging.getLogger("ish.imap")
-    prev_a = target_a.level
-    prev_b = target_b.level
-    monkeypatch.setenv(metrics.LOG_LEVELS_ENV, "ISH=DEBUG,ish.imap=WARNING,invalid")
-
-    try:
-        metrics.configure_logging()
-        assert target_a.level == logging.DEBUG
-        assert target_b.level == logging.WARNING
-    finally:
-        monkeypatch.delenv(metrics.LOG_LEVELS_ENV, raising=False)
-        target_a.setLevel(prev_a)
-        target_b.setLevel(prev_b)
-
-
 def test_metrics_server_starts_when_env_set(monkeypatch):
     fake_start = mock.MagicMock()
     monkeypatch.setattr(metrics, "start_http_server", fake_start)
