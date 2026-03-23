@@ -1,0 +1,27 @@
+name: Manual Docker Cleanup
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Clean Docker Hub
+        uses: lostlink/docker-cleanup@v1
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          repositories: 'ish'
+          dry-run: ${{ github.event.inputs.dry_run }}
+          verbose: true
