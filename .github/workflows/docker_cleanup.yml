@@ -20,8 +20,8 @@ jobs:
       - name: Clean Docker Hub
         uses: lostlink/docker-cleanup@v1.0.1
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          username: ${{ vars.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
           repositories: 'ish'
           dry-run: ${{ github.event.inputs.dry_run }}
           verbose: true
