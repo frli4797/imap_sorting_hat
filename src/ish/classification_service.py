@@ -15,6 +15,9 @@ from .message import Message
 
 Action = Enum("Action", ["YES", "NO", "QUIT"])
 
+DEFAULT_PROBABILITY_THRESHOLD = 0.55
+DEFAULT_RUNNER_UP_GAP_THRESHOLD = 0.15
+
 
 class ClassificationService:
     """Handle classification and message moving workflow."""
@@ -31,7 +34,8 @@ class ClassificationService:
         dry_run: bool,
         exit_event: Event,
         logger: Optional[logging.Logger] = None,
-        probability_threshold: float = 0.25,
+        probability_threshold: float = DEFAULT_PROBABILITY_THRESHOLD,
+        runner_up_gap_threshold: float = DEFAULT_RUNNER_UP_GAP_THRESHOLD,
     ) -> None:
         self._imap_conn_provider = imap_conn_provider
         self._get_embeddings = get_embeddings
@@ -42,6 +46,7 @@ class ClassificationService:
         self._dry_run = dry_run
         self._exit_event = exit_event
         self._probability_threshold = probability_threshold
+        self._runner_up_gap_threshold = runner_up_gap_threshold
         self._logger = logger or logging.getLogger("ish").getChild(self.__class__.__name__)
 
         self._classifier: Optional[RandomForestClassifier] = None
@@ -90,15 +95,23 @@ class ClassificationService:
                 proba = classifier.predict_proba([embedding])[0]
                 ranks = sorted(zip(proba, classifier.classes_), reverse=True)
                 top_probability, _ = ranks[0]
+                runner_up_probability = ranks[1][0] if len(ranks) > 1 else 0.0
+                confidence_gap = top_probability - runner_up_probability
                 message_entry = {
                     "uid": uid,
                     "probability": top_probability,
+                    "runner_up_probability": runner_up_probability,
+                    "confidence_gap": confidence_gap,
                     "from": message.from_addr,
                     "body": message.preview(100),
                 }
 
                 if top_probability <= self._probability_threshold:
                     self._log_move(uid, "Skipping due to probability", ranks, message_entry)
+                    self._increment_skipped()
+                    continue
+                if confidence_gap < self._runner_up_gap_threshold:
+                    self._log_move(uid, "Skipping due to ambiguous top prediction", ranks, message_entry)
                     self._increment_skipped()
                     continue
 

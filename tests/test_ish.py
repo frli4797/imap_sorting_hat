@@ -128,6 +128,37 @@ def test_classify_messages_skips_when_probability_low(monkeypatch):
     ish_instance._classification_service.move_messages.assert_called()
 
 
+def test_classify_messages_skips_when_runner_up_is_too_close(monkeypatch):
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [101]
+    monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
+
+    ish_instance = ISH(dry_run=True)
+
+    class AmbiguousClassifier:
+        classes_ = ["destA", "destB"]
+
+        def predict(self, X):
+            return ["destA"]
+
+        def predict_proba(self, X):
+            # Top prediction clears the minimum probability threshold,
+            # but the runner-up is too close to move safely.
+            return [[0.56, 0.44]]
+
+    ish_instance.classifier = AmbiguousClassifier()
+    ish_instance.get_embeddings = mock.MagicMock(return_value={101: np.array([0.2])})
+    ish_instance.get_msgs = mock.MagicMock(
+        return_value={101: Message(uid=101, from_addr="", to_addr="", body="", subject="")}
+    )
+    ish_instance._classification_service.move_messages = mock.MagicMock(return_value=0)
+
+    ish_instance.classify_messages(["INBOX"])
+
+    assert ish_instance.skipped >= 1
+    ish_instance._classification_service.move_messages.assert_called_once_with("INBOX", {})
+
+
 def make_handler_with_mock_conn():
     handler = ImapHandler(settings=mock.MagicMock(), readonly=False) # pyright: ignore[reportUndefinedVariable]
     conn = mock.MagicMock()
