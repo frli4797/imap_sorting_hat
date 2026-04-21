@@ -8,28 +8,43 @@ It also documents a small amount of intended future direction so implementation 
 
 1. `Settings` loads configuration from `ISH_CONFIG_PATH` or `~/.ish/settings.yaml`.
 2. `ISH` initializes logging, metrics, IMAP/OpenAI clients, and the SQLite cache in the configured data directory.
-3. `ISH.run()` connects to IMAP and OpenAI, then ensures a classifier exists.
-4. Training uses destination folders as labels:
+3. `ISH` wires together the service-layer collaborators used for message fetch, embedding lookup, training, and classification.
+4. `ISH.run()` connects to IMAP and OpenAI, then ensures a classifier exists.
+5. Training uses destination folders as labels:
    - fetch folder UIDs
    - reuse cached message text and embeddings when possible
    - request missing embeddings from OpenAI in batches
    - train a `RandomForestClassifier`
    - write the model to `model.pkl`
-5. Classification scans unread messages in source folders:
-   - fetch unread UIDs
+6. Classification scans source folders:
+   - fetch unread UIDs in normal mode
+   - fetch all UIDs in interactive mode
    - resolve embeddings from cache or OpenAI
    - predict destination folder and probability
    - move only when probability exceeds the configured threshold
-6. Cache state is persisted in SQLite, and runtime polling/training behavior is controlled by CLI options.
+7. Cache state is persisted in SQLite.
 
 ## Module Responsibilities
 
 - `src/ish/app.py`
   - owns application lifecycle
-  - parses runtime options such as dry-run, daemon mode, poll interval, training interval, and move threshold
-  - trains and loads the classifier
-  - groups predicted moves by destination folder
-  - records metrics
+  - parses CLI flags such as interactive, dry-run, daemon mode, and configuration path
+  - wires together the service objects
+  - drives the top-level run loop
+- `src/ish/classification_service.py`
+  - classifies source-folder messages
+  - decides between interactive and unattended selection behavior
+  - performs grouped move operations
+- `src/ish/training_manager.py`
+  - collects training data
+  - trains and evaluates the classifier
+  - writes the trained model to disk
+- `src/ish/message_repository.py`
+  - fetches messages from cache first
+  - fills cache entries from IMAP when missing
+- `src/ish/embedding_store.py`
+  - fetches embeddings from cache first
+  - fills embedding cache from OpenAI when missing
 - `src/ish/imap.py`
   - connects to IMAP
   - searches folders
@@ -93,11 +108,11 @@ CI runs `pytest tests` on Python `3.13`.
 
 ## Current Quirks Worth Preserving Intentionally
 
-- The direct `ISH(...)` constructor and CLI runtime options currently have different default move thresholds.
 - Legacy shelve data is migrated automatically only when `cache.sqlite` is missing and old cache files exist.
-- Classification only acts on unread messages from configured source folders.
+- Classification acts on unread messages in unattended mode, but on all messages in interactive mode.
 - Training requires at least two samples and at least two destination folders with usable data.
-- The current branch has no interactive classification mode; runtime behavior is driven through CLI options.
+- The classification threshold is currently fixed in `ClassificationService` rather than being exposed as a CLI option.
+- The daemon polling interval is currently fixed by `POLL_TIME_SEC` rather than being exposed as a CLI option.
 
 ## Planned Direction
 

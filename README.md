@@ -23,9 +23,8 @@ To configure **ish** there needs to be a directory in which **ish** will put e-m
 ```text
 .ish
 ├── data
-│   ├── embd
+│   ├── cache.sqlite
 │   ├── model.pkl
-│   └── msgs
 ├── settings.yaml
 ```
 
@@ -57,17 +56,17 @@ openai_model: text-embedding-3-small
 ### Command line
 
 Run the **ish** by issuing
-`python3 ish.py`
+`python -m ish.app`
 The main program has a few parameters that can be used.
 
 ```text
-usage: ish.py [-h] [--learn-folders] [--interactive] [--dry-run] [--daemon] [--config-path CONFIG_PATH] [--verbose]
+usage: app.py [-h] [--learn-folders] [--interactive] [--dry-run] [--daemon] [--config-path CONFIG_PATH] [--verbose]
 options:
   -h, --help            show this help message and exit
   --learn-folders, -l   Learn based on the contents of the destination folders
   --interactive, -i     Prompt user before moving anything
   --dry-run, -n         Don't actually move emails
-  --daemon, -D          Run in daemon mode (NOT IMPLEMENTED)
+  --daemon, -D          Run in daemon/polling mode
   --config-path, -C CONFIG_PATH
                         Path for config file and data. Will default to /Users/fredriklilja/.ish
   --verbose, -v         Verbose/debug mode

@@ -69,7 +69,11 @@ Notes:
 
 ## Code Map
 
-- `src/ish/app.py`: main orchestration, CLI args, training loop, classification loop, move threshold handling
+- `src/ish/app.py`: application lifecycle, CLI parsing, cache/client wiring, and delegation to service modules
+- `src/ish/classification_service.py`: classification workflow, interactive vs unattended behavior, and IMAP move orchestration
+- `src/ish/training_manager.py`: classifier training, evaluation, and model persistence
+- `src/ish/message_repository.py`: cached message lookup and IMAP-backed cache fill
+- `src/ish/embedding_store.py`: cached embedding lookup and OpenAI-backed embedding fill
 - `src/ish/imap.py`: IMAP connection management, folder search, message fetch, move/copy behavior, message parsing
 - `src/ish/db.py`: SQLite cache for message content, folder/uid mapping, and embeddings
 - `src/ish/settings.py`: YAML-backed configuration and data directory setup
@@ -86,10 +90,10 @@ For longer-lived context, see:
 
 - When practical, pair code changes with unit tests or non-regression tests that cover the new behavior or the bug being fixed.
 - If a code change is not paired with tests, explain why the test was skipped or why it was not practical.
-- For mail movement behavior, think through `ISH.move_messages()` and `ImapHandler.move()` together.
-- For fetch and embedding work, preserve the cache-first flow in `ISH.get_msgs()` and `ISH.get_embeddings()`.
+- For mail movement behavior, think through `ClassificationService.move_messages()` and `ImapHandler.move()` together.
+- For fetch and embedding work, preserve the cache-first flow across `MessageRepository` and `EmbeddingStore`.
 - For persistence changes, account for the current SQLite cache schema and the legacy shelve migration path.
-- If you touch threshold defaults, do it intentionally in both places. `ISH.__init__()` and `RuntimeOptions.from_args()` currently use different defaults.
+- If you touch classification threshold or polling behavior, note that they are currently fixed in service/runtime code rather than exposed as full runtime options.
 - If you change behavior that a user will notice, update the related docs in the same change.
 - New business logic should stay reusable outside the CLI so it can later be exposed via API and UI.
 - Keep stateful operations callable from future service layers instead of coupling them tightly to terminal flows.
@@ -116,7 +120,8 @@ For longer-lived context, see:
 - `Message.hash()` is content-based and does not include UID. Cache mapping behavior depends on that design.
 - `SQLiteCache.store_message()` rewrites folder associations for a hash before inserting the current mapping.
 - `ISH.run()` can trigger both training and classification in one session.
-- `move_messages()` is the last step before side effects on a mailbox. Changes there need careful tests.
+- `ClassificationService.move_messages()` is the last step before side effects on a mailbox. Changes there need careful tests.
+- Interactive vs unattended classification changes which IMAP search criteria are used and how moved messages are flagged.
 
 ## Future Direction
 
