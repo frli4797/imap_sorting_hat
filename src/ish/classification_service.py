@@ -11,10 +11,13 @@ from sklearn.ensemble import RandomForestClassifier
 from . import metrics
 from .imap import ImapHandler
 from .message import Message
+from .settings import (
+    DEFAULT_CLASSIFICATION_PROBABILITY_THRESHOLD,
+    DEFAULT_CLASSIFICATION_RUNNER_UP_GAP_THRESHOLD,
+)
 
 
 Action = Enum("Action", ["YES", "NO", "QUIT"])
-
 
 class ClassificationService:
     """Handle classification and message moving workflow."""
@@ -31,7 +34,8 @@ class ClassificationService:
         dry_run: bool,
         exit_event: Event,
         logger: Optional[logging.Logger] = None,
-        probability_threshold: float = 0.25,
+        probability_threshold: float = DEFAULT_CLASSIFICATION_PROBABILITY_THRESHOLD,
+        runner_up_gap_threshold: float = DEFAULT_CLASSIFICATION_RUNNER_UP_GAP_THRESHOLD,
     ) -> None:
         self._imap_conn_provider = imap_conn_provider
         self._get_embeddings = get_embeddings
@@ -42,6 +46,7 @@ class ClassificationService:
         self._dry_run = dry_run
         self._exit_event = exit_event
         self._probability_threshold = probability_threshold
+        self._runner_up_gap_threshold = runner_up_gap_threshold
         self._logger = logger or logging.getLogger("ish").getChild(self.__class__.__name__)
 
         self._classifier: Optional[RandomForestClassifier] = None
@@ -86,19 +91,23 @@ class ClassificationService:
                 if message is None:
                     continue
 
-                dest_folder = classifier.predict([embedding])[0]
                 proba = classifier.predict_proba([embedding])[0]
                 ranks = sorted(zip(proba, classifier.classes_), reverse=True)
-                top_probability, _ = ranks[0]
+                dest_folder = str(ranks[0][1])
+                should_move, skip_reason, top_probability, runner_up_probability, confidence_gap = (
+                    self._decision_from_ranks(ranks)
+                )
                 message_entry = {
                     "uid": uid,
                     "probability": top_probability,
+                    "runner_up_probability": runner_up_probability,
+                    "confidence_gap": confidence_gap,
                     "from": message.from_addr,
                     "body": message.preview(100),
                 }
 
-                if top_probability <= self._probability_threshold:
-                    self._log_move(uid, "Skipping due to probability", ranks, message_entry)
+                if not should_move:
+                    self._log_move(uid, skip_reason, ranks, message_entry)
                     self._increment_skipped()
                     continue
 
@@ -111,7 +120,6 @@ class ClassificationService:
                     if action == Action.QUIT:
                         self._logger.info("User requested quit; stopping classification.")
                         self._exit_event.set()
-                        stop_processing = True
                         break
 
                 to_move.setdefault(dest_folder, []).append(message_entry)
@@ -173,6 +181,38 @@ class ClassificationService:
     def _increment_skipped(self, amount: int = 1) -> None:
         self.skipped += amount
         metrics.increment_skipped(amount)
+
+    def _decision_from_ranks(self, ranks) -> tuple[bool, str, float, float, float]:
+        top_probability, _ = ranks[0]
+        runner_up_probability = ranks[1][0] if len(ranks) > 1 else 0.0
+        confidence_gap = top_probability - runner_up_probability
+
+        if top_probability <= self._probability_threshold:
+            return (
+                False,
+                (
+                    "Skipping due to low confidence "
+                    f"(top={top_probability:.2f}, min={self._probability_threshold:.2f})"
+                ),
+                top_probability,
+                runner_up_probability,
+                confidence_gap,
+            )
+
+        if confidence_gap < self._runner_up_gap_threshold:
+            return (
+                False,
+                (
+                    "Skipping due to ambiguous top prediction "
+                    f"(top={top_probability:.2f}, runner_up={runner_up_probability:.2f}, "
+                    f"gap={confidence_gap:.2f}, min_gap={self._runner_up_gap_threshold:.2f})"
+                ),
+                top_probability,
+                runner_up_probability,
+                confidence_gap,
+            )
+
+        return (True, "Going to move", top_probability, runner_up_probability, confidence_gap)
 
     def _log_move(self, uid: int, text: str, ranks, message_entry) -> None:
         self._logger.debug(

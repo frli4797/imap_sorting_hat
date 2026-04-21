@@ -49,7 +49,12 @@ ignore_folders:
 - Junk
 openai_api_key: ll-ddjg-RI51oFV-0Du9Xo4ERraVFd0UvcwFPP0wUkTB2tC
 openai_model: text-embedding-3-small
+classification_probability_threshold: 0.55
+classification_runner_up_gap_threshold: 0.15
 ```
+
+`classification_probability_threshold` sets the minimum confidence required before a message is eligible to move.
+`classification_runner_up_gap_threshold` sets the minimum gap between the best and second-best class before a move is considered unambiguous.
 
 ## Running
 

@@ -122,7 +122,9 @@ class ISH:
             max_source_messages=MAX_SOURCE_MESSAGES,
             interactive=self._interactive,
             dry_run=self._dry_run,
-            exit_event=self._exit_event
+            exit_event=self._exit_event,
+            probability_threshold=self.__settings.classification_probability_threshold,
+            runner_up_gap_threshold=self.__settings.classification_runner_up_gap_threshold,
         )
 
         self.moved = 0
