@@ -35,7 +35,7 @@ This is the main repo guidance for Codex and similar coding agents.
 Notes:
 
 - GitHub Actions currently runs `pytest tests` on Python `3.13`.
-- The README still contains some legacy `python3 ish.py` wording. Prefer the module entry point from the code.
+- The README should stay aligned with the argparse entry point in `src/ish/app.py`.
 - There is no dedicated formatter config in the repo today. Match the existing style and keep diffs tight.
 
 ## Git and PR Conventions
@@ -71,7 +71,7 @@ Notes:
 
 - `src/ish/app.py`: main orchestration, CLI args, training loop, classification loop, move threshold handling
 - `src/ish/imap.py`: IMAP connection management, folder search, message fetch, move/copy behavior, message parsing
-- `src/ish/db.py`: SQLite cache for message content, folder/uid mapping, embeddings, and move history
+- `src/ish/db.py`: SQLite cache for message content, folder/uid mapping, and embeddings
 - `src/ish/settings.py`: YAML-backed configuration and data directory setup
 - `src/ish/metrics.py`: logging configuration and optional Prometheus metrics
 - `src/ish/message.py`: immutable message model and content hash
@@ -88,7 +88,7 @@ For longer-lived context, see:
 - If a code change is not paired with tests, explain why the test was skipped or why it was not practical.
 - For mail movement behavior, think through `ISH.move_messages()` and `ImapHandler.move()` together.
 - For fetch and embedding work, preserve the cache-first flow in `ISH.get_msgs()` and `ISH.get_embeddings()`.
-- For persistence changes, account for both `cache.sqlite` and the legacy shelve migration path.
+- For persistence changes, account for the current SQLite cache schema and the legacy shelve migration path.
 - If you touch threshold defaults, do it intentionally in both places. `ISH.__init__()` and `RuntimeOptions.from_args()` currently use different defaults.
 - If you change behavior that a user will notice, update the related docs in the same change.
 - New business logic should stay reusable outside the CLI so it can later be exposed via API and UI.
@@ -113,7 +113,7 @@ For longer-lived context, see:
 
 ## Risk Areas
 
-- `Message.hash()` is content-based and does not include UID. Cache and move history behavior depend on that design.
+- `Message.hash()` is content-based and does not include UID. Cache mapping behavior depends on that design.
 - `SQLiteCache.store_message()` rewrites folder associations for a hash before inserting the current mapping.
 - `ISH.run()` can trigger both training and classification in one session.
 - `move_messages()` is the last step before side effects on a mailbox. Changes there need careful tests.

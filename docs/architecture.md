@@ -20,15 +20,16 @@ It also documents a small amount of intended future direction so implementation 
    - resolve embeddings from cache or OpenAI
    - predict destination folder and probability
    - move only when probability exceeds the configured threshold
-6. Move history and cache state are persisted in SQLite.
+6. Cache state is persisted in SQLite, and runtime polling/training behavior is controlled by CLI options.
 
 ## Module Responsibilities
 
 - `src/ish/app.py`
   - owns application lifecycle
+  - parses runtime options such as dry-run, daemon mode, poll interval, training interval, and move threshold
   - trains and loads the classifier
   - groups predicted moves by destination folder
-  - records metrics and move history
+  - records metrics
 - `src/ish/imap.py`
   - connects to IMAP
   - searches folders
@@ -39,10 +40,10 @@ It also documents a small amount of intended future direction so implementation 
   - stores canonical message content by hash
   - maps `(folder, uid)` to `msg_hash`
   - stores embeddings as pickled numpy arrays
-  - stores move history with confidence scores
 - `src/ish/settings.py`
   - loads YAML config
   - resolves config and data directories
+  - provides compatibility helper methods used by `ISH`
 - `src/ish/metrics.py`
   - configures logging
   - exposes optional Prometheus metrics
@@ -52,17 +53,16 @@ It also documents a small amount of intended future direction so implementation 
 By default the app works under `~/.ish` unless `ISH_CONFIG_PATH` overrides it.
 
 - `settings.yaml`: IMAP, folder, data-dir, and OpenAI configuration
-- `data/cache.sqlite`: messages, folder mappings, embeddings, and move history
+- `data/cache.sqlite`: messages, folder mappings, and embeddings
 - `data/model.pkl`: trained classifier
 
 ## SQLite Model
 
-The cache currently has four main tables:
+The cache currently has three main tables:
 
 - `messages_content`: canonical message fields keyed by `msg_hash`
 - `folder_messages`: current `(folder, uid) -> msg_hash` mapping
 - `embeddings`: pickled embedding vectors keyed by `msg_hash`
-- `moves`: move history with confidence and timestamp
 
 Important implementation detail:
 
@@ -97,6 +97,7 @@ CI runs `pytest tests` on Python `3.13`.
 - Legacy shelve data is migrated automatically only when `cache.sqlite` is missing and old cache files exist.
 - Classification only acts on unread messages from configured source folders.
 - Training requires at least two samples and at least two destination folders with usable data.
+- The current branch has no interactive classification mode; runtime behavior is driven through CLI options.
 
 ## Planned Direction
 
