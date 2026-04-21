@@ -111,12 +111,9 @@ def test_classify_messages_skips_when_probability_low(monkeypatch):
     class LowProbClassifier:
         classes_ = ["destA", "destB"]
 
-        def predict(self, X):
-            return ["destA"]
-
         def predict_proba(self, X):
-            # Low top probability so it will be skipped (< 0.25)
-            return [[0.1, 0.05]]
+            # Top probability stays below the configured minimum.
+            return [[0.52, 0.48]]
 
     ish_instance.classifier = LowProbClassifier()
     ish_instance.get_embeddings = mock.MagicMock(return_value={99: np.array([0.1])})
@@ -157,6 +154,137 @@ def test_classify_messages_skips_when_runner_up_is_too_close(monkeypatch):
 
     assert ish_instance.skipped >= 1
     ish_instance._classification_service.move_messages.assert_called_once_with("INBOX", {})
+
+
+def test_classify_messages_logs_specific_reason_when_runner_up_is_too_close(monkeypatch, caplog):
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [104]
+    monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
+
+    ish_instance = ISH(dry_run=True)
+
+    class AmbiguousClassifier:
+        classes_ = ["destA", "destB"]
+
+        def predict_proba(self, X):
+            return [[0.56, 0.44]]
+
+    ish_instance.classifier = AmbiguousClassifier()
+    ish_instance.get_embeddings = mock.MagicMock(return_value={104: np.array([0.2])})
+    ish_instance.get_msgs = mock.MagicMock(
+        return_value={104: Message(uid=104, from_addr="", to_addr="", body="", subject="")}
+    )
+    ish_instance._classification_service.move_messages = mock.MagicMock(return_value=0)
+
+    with caplog.at_level("DEBUG", logger="ish"):
+        ish_instance.classify_messages(["INBOX"])
+
+    assert "Skipping due to ambiguous top prediction" in caplog.text
+    assert "runner_up=0.44" in caplog.text
+    assert "min_gap=0.15" in caplog.text
+
+
+def test_classify_messages_moves_when_gap_meets_threshold(monkeypatch):
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [102]
+    monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
+
+    ish_instance = ISH(dry_run=True)
+
+    class ClearEnoughClassifier:
+        classes_ = ["destA", "destB"]
+
+        def predict_proba(self, X):
+            # Clears both thresholds with room for float precision.
+            return [[0.58, 0.42]]
+
+    ish_instance.classifier = ClearEnoughClassifier()
+    ish_instance.get_embeddings = mock.MagicMock(return_value={102: np.array([0.2])})
+    ish_instance.get_msgs = mock.MagicMock(
+        return_value={102: Message(uid=102, from_addr="", to_addr="", body="", subject="")}
+    )
+    ish_instance._classification_service.move_messages = mock.MagicMock(return_value=1)
+
+    ish_instance.classify_messages(["INBOX"])
+
+    assert ish_instance.skipped == 0
+    ish_instance._classification_service.move_messages.assert_called_once()
+
+
+def test_classify_messages_skips_when_probability_equals_threshold(monkeypatch):
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [103]
+    monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
+
+    ish_instance = ISH(dry_run=True)
+
+    class ThresholdEdgeClassifier:
+        classes_ = ["destA", "destB"]
+
+        def predict_proba(self, X):
+            return [[0.55, 0.45]]
+
+    ish_instance.classifier = ThresholdEdgeClassifier()
+    ish_instance.get_embeddings = mock.MagicMock(return_value={103: np.array([0.2])})
+    ish_instance.get_msgs = mock.MagicMock(
+        return_value={103: Message(uid=103, from_addr="", to_addr="", body="", subject="")}
+    )
+    ish_instance._classification_service.move_messages = mock.MagicMock(return_value=0)
+
+    ish_instance.classify_messages(["INBOX"])
+
+    assert ish_instance.skipped >= 1
+    ish_instance._classification_service.move_messages.assert_called_once_with("INBOX", {})
+
+
+def test_classify_messages_logs_specific_reason_when_probability_too_low(monkeypatch, caplog):
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [105]
+    monkeypatch.setattr(ish_mod, "ImapHandler", lambda *a, **k: fake_imap)
+
+    ish_instance = ISH(dry_run=True)
+
+    class ThresholdEdgeClassifier:
+        classes_ = ["destA", "destB"]
+
+        def predict_proba(self, X):
+            return [[0.55, 0.45]]
+
+    ish_instance.classifier = ThresholdEdgeClassifier()
+    ish_instance.get_embeddings = mock.MagicMock(return_value={105: np.array([0.2])})
+    ish_instance.get_msgs = mock.MagicMock(
+        return_value={105: Message(uid=105, from_addr="", to_addr="", body="", subject="")}
+    )
+    ish_instance._classification_service.move_messages = mock.MagicMock(return_value=0)
+
+    with caplog.at_level("DEBUG", logger="ish"):
+        ish_instance.classify_messages(["INBOX"])
+
+    assert "Skipping due to low confidence" in caplog.text
+    assert "top=0.55" in caplog.text
+    assert "min=0.55" in caplog.text
+
+
+def test_ish_reads_thresholds_from_settings(monkeypatch):
+    fake_settings = SimpleNamespace(
+        data_directory="/tmp/data",
+        source_folders=["INBOX"],
+        destination_folders=["Important"],
+        ignore_folders=[],
+        openai_api_key="key",
+        openai_model="text-embedding-3-small",
+        classification_probability_threshold=0.72,
+        classification_runner_up_gap_threshold=0.21,
+    )
+    fake_settings.update_data_settings = lambda: None
+    monkeypatch.setattr(ish_mod, "Settings", lambda debug=False: fake_settings)
+    monkeypatch.setattr(ish_mod, "SQLiteCache", mock.MagicMock())
+    monkeypatch.setattr(ish_mod, "ImapHandler", lambda *args, **kwargs: mock.MagicMock())
+
+    ish_instance = ISH(dry_run=True)
+
+    assert ish_instance._classification_service._probability_threshold == pytest.approx(0.72)
+    assert ish_instance._classification_service._runner_up_gap_threshold == pytest.approx(0.21)
 
 
 def make_handler_with_mock_conn():
@@ -212,6 +340,8 @@ def test_run_calls_learn_when_no_model_file(tmp_path, monkeypatch):
         ignore_folders=[],
         openai_api_key="key",
         openai_model="text-embedding-ada-002",
+        classification_probability_threshold=0.55,
+        classification_runner_up_gap_threshold=0.15,
     )
     fake_settings.update_data_settings = lambda: None
     monkeypatch.setattr(ish_mod, "Settings", lambda debug=False: fake_settings)

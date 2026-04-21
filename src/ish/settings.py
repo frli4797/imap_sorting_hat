@@ -5,6 +5,9 @@ from os.path import exists, isdir
 
 import yaml
 
+DEFAULT_CLASSIFICATION_PROBABILITY_THRESHOLD = 0.55
+DEFAULT_CLASSIFICATION_RUNNER_UP_GAP_THRESHOLD = 0.15
+
 
 class Settings(dict):
     """Settings for the application"""
@@ -69,6 +72,14 @@ class Settings(dict):
     def openai_model(self) -> str:
         return self["openai_model"]
 
+    @property
+    def classification_probability_threshold(self) -> float:
+        return float(self["classification_probability_threshold"])
+
+    @property
+    def classification_runner_up_gap_threshold(self) -> float:
+        return float(self["classification_runner_up_gap_threshold"])
+
     def __set_directories(self):
         if self["data_directory"] == "":
             self["data_directory"] = os.path.join(self.config_directory, "data")
@@ -106,6 +117,8 @@ class Settings(dict):
         self["data_directory"] = ""
         self["openai_api_key"] = ""
         self["openai_model"] = "text-embedding-ada-002"
+        self["classification_probability_threshold"] = DEFAULT_CLASSIFICATION_PROBABILITY_THRESHOLD
+        self["classification_runner_up_gap_threshold"] = DEFAULT_CLASSIFICATION_RUNNER_UP_GAP_THRESHOLD
 
         self.config_directory = os.environ.get("ISH_CONFIG_PATH")
         if self.config_directory is None or self.config_directory == "":
@@ -114,8 +127,28 @@ class Settings(dict):
 
         if exists(self.settings_file):
             self.__read()
+        self._apply_env_overrides()
         self.__set_directories()
         self.logger.debug("Settings\n%s", self)
+
+    def _apply_env_overrides(self):
+        self._apply_float_env_override(
+            "ISH_CLASSIFICATION_PROBABILITY_THRESHOLD",
+            "classification_probability_threshold",
+        )
+        self._apply_float_env_override(
+            "ISH_CLASSIFICATION_RUNNER_UP_GAP_THRESHOLD",
+            "classification_runner_up_gap_threshold",
+        )
+
+    def _apply_float_env_override(self, env_key: str, setting_key: str) -> None:
+        raw_value = os.environ.get(env_key)
+        if raw_value in (None, ""):
+            return
+        try:
+            self[setting_key] = float(raw_value)
+        except ValueError:
+            self.logger.warning("Ignoring invalid float for %s: %s", env_key, raw_value)
 
     # New helper methods referenced by ish.py (no-op / sane defaults)
     def update_data_settings(self):
