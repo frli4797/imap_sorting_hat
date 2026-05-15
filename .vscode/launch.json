@@ -9,7 +9,8 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${file}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.vscode/test.env"
     },
     {
       "name": "ISH learn",
@@ -39,7 +40,8 @@
         "-v"
       ],
       "env": {
-        "ISH_CONFIG_PATH": "dummy"
+        "ISH_CONFIG_PATH": "${workspaceFolder}/.ish-dev",
+        "PYTHONPATH": "${workspaceFolder}/src"
       }
     },
     {
@@ -49,6 +51,10 @@
       "module": "ish.app",
       "cwd": "${workspaceFolder}",
       "justMyCode": true,
+      "env": {
+        "ISH_CONFIG_PATH": "${workspaceFolder}/.ish-dev",
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
       "args": [
         "-v",
         "-D",
@@ -63,6 +69,7 @@
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": false,
+      "envFile": "${workspaceFolder}/.vscode/test.env",
       "args": [
         //"--dry-run"
       ]
