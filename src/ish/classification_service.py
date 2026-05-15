@@ -80,6 +80,7 @@ class ClassificationService:
                 if not self._interactive
                 else imap_conn.search(source_folder, ["ALL"])
             )
+            uids = sorted(uids, reverse=True)
 
             embeddings = self._get_embeddings(source_folder, uids[: self._max_source_messages])
             metrics.record_folder_embedding_count(source_folder, len(embeddings))

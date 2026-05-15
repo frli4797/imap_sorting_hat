@@ -1,5 +1,6 @@
 import os
 import types
+from threading import Event
 from types import SimpleNamespace
 from unittest import mock
 
@@ -9,7 +10,9 @@ import pytest
 
 import ish.app as ish_mod
 from ish.app import ISH
+from ish.classification_service import ClassificationService
 from ish.message import Message
+from ish.training_manager import TrainingManager
 
 
 def make_fake_openai_client():
@@ -374,7 +377,7 @@ def test_learn_folders_uses_cached_embeddings(monkeypatch, tmp_path):
 
     ish = ISH(dry_run=True)
     fake_imap = mock.MagicMock()
-    fake_imap.search.return_value = []
+    fake_imap.search.side_effect = [[0, 1, 2], [10, 11, 12]]
     ish._ISH__imap_conn = fake_imap
     monkeypatch.setattr(ish, "get_embeddings", lambda folder, uids: {})
 
@@ -388,3 +391,80 @@ def test_learn_folders_uses_cached_embeddings(monkeypatch, tmp_path):
 
     clf = ish.learn_folders(folders)
     assert clf is not None
+
+
+def test_training_ignores_cached_embeddings_for_uids_not_in_folder_search():
+    fake_imap = mock.MagicMock()
+    fake_imap.search.side_effect = [[1, 2], [10, 11]]
+
+    cached = {
+        "FolderA": {
+            1: np.array([1.0]),
+            2: np.array([2.0]),
+            999: np.array([999.0]),
+        },
+        "FolderB": {
+            10: np.array([10.0]),
+            11: np.array([11.0]),
+            998: np.array([998.0]),
+        },
+    }
+
+    manager = TrainingManager(
+        imap_conn_provider=lambda: fake_imap,
+        get_embeddings=lambda folder, uids: {},
+        get_cache_embeddings=lambda folder: dict(cached[folder]),
+        model_file="unused.pkl",
+        max_learn_messages=100,
+        exit_event=Event(),
+    )
+
+    embeddings, labels = manager._collect_training_data(fake_imap, ["FolderA", "FolderB"])
+
+    assert len(embeddings) == 4
+    assert labels == ["FolderA", "FolderA", "FolderB", "FolderB"]
+    assert all(float(emb[0]) not in {998.0, 999.0} for emb in embeddings)
+
+
+def test_message_embedding_text_includes_structured_headers():
+    message = Message(
+        uid=1,
+        from_addr="alice@example.com",
+        to_addr="bob@example.com",
+        subject="Travel",
+        body="Boarding pass attached",
+    )
+
+    assert message.embedding_text() == (
+        "From: alice@example.com\n"
+        "To: bob@example.com\n"
+        "Subject: Travel\n"
+        "Body: Boarding pass attached"
+    )
+
+
+def test_classification_sorts_source_uids_newest_first():
+    fake_imap = mock.MagicMock()
+    fake_imap.search.return_value = [1, 3, 2]
+
+    class DummyClassifier:
+        classes_ = ["A", "B"]
+
+        def predict_proba(self, X):
+            return [[0.9, 0.1]]
+
+    service = ClassificationService(
+        imap_conn_provider=lambda: fake_imap,
+        get_embeddings=mock.MagicMock(return_value={}),
+        get_messages=mock.MagicMock(return_value={}),
+        model_file="unused.pkl",
+        max_source_messages=2,
+        interactive=False,
+        dry_run=True,
+        exit_event=Event(),
+    )
+    service.classifier = DummyClassifier()
+
+    service.classify_messages(["INBOX"])
+
+    service._get_embeddings.assert_called_once_with("INBOX", [3, 2])

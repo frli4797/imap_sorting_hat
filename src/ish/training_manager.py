@@ -1,10 +1,12 @@
 import logging
+from collections import Counter
 from threading import Event
 from time import perf_counter
 from typing import Callable, Dict, List, Optional
 
 import joblib
 import numpy as np
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
@@ -35,7 +37,7 @@ class TrainingManager:
         self._exit_event = exit_event
         self._logger = logger or logging.getLogger("ish").getChild(self.__class__.__name__)
 
-    def learn_folders(self, folders: List[str]) -> Optional[RandomForestClassifier]:
+    def learn_folders(self, folders: List[str]) -> Optional[RandomForestClassifier | CalibratedClassifierCV]:
         """Train a classifier from the provided folders."""
         imap_conn = self._imap_conn_provider()
         fetch_start = perf_counter()
@@ -53,7 +55,7 @@ class TrainingManager:
 
         X = np.array(embed_array)
         y = np.array(folder_array)
-        X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+        X_train, X_test, y_train, y_test = self._split_training_data(X, y)
 
         clf = self._train_classifier(X_train, y_train)
         accuracy = self._evaluate_classifier(clf, X_test, y_test, folders)
@@ -77,10 +79,13 @@ class TrainingManager:
         for folder in folders:
             self._logger.info("Learning folder %s", folder)
             uids = imap_conn.search(folder, ["ALL"])
-            embeddings = self._get_embeddings(folder, uids[: self._max_learn_messages])
+            current_uids = uids[: self._max_learn_messages]
+            current_uid_set = set(current_uids)
+            embeddings = self._get_embeddings(folder, current_uids)
             cached_embeddings = self._get_cache_embeddings(folder)
             for uid, emb in cached_embeddings.items():
-                embeddings.setdefault(uid, emb)
+                if uid in current_uid_set:
+                    embeddings.setdefault(uid, emb)
             if len(embeddings) == 0:
                 self._logger.warning("No embeddings available for folder %s; skipping.", folder)
                 continue
@@ -116,16 +121,49 @@ class TrainingManager:
             "Fetched %i embeddings in %.2f seconds", total_embeddings, duration
         )
 
+    def _split_training_data(
+        self, X: np.ndarray, y: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        label_counts = Counter(y)
+        label_count = len(label_counts)
+        can_stratify = (
+            len(y) >= label_count * 2
+            and all(count >= 2 for count in label_counts.values())
+        )
+        if not can_stratify:
+            self._logger.warning(
+                "Training data is too sparse to stratify safely; using an unstratified validation split."
+            )
+            return train_test_split(X, y, random_state=0)
+
+        test_size = max(0.25, label_count / len(y))
+        test_size = min(test_size, 0.5)
+        return train_test_split(X, y, random_state=0, stratify=y, test_size=test_size)
+
     def _train_classifier(
         self, X_train: np.ndarray, y_train: np.ndarray
-    ) -> RandomForestClassifier:
-        clf = RandomForestClassifier(n_estimators=100, random_state=0)
-        clf.fit(X_train, y_train)
-        return clf
+    ) -> RandomForestClassifier | CalibratedClassifierCV:
+        base_clf = RandomForestClassifier(
+            n_estimators=100,
+            random_state=0,
+            class_weight="balanced",
+        )
+        label_counts = Counter(y_train)
+        calibration_folds = min(3, min(label_counts.values()))
+        if calibration_folds >= 2:
+            clf = CalibratedClassifierCV(base_clf, cv=calibration_folds)
+            clf.fit(X_train, y_train)
+            return clf
+
+        self._logger.warning(
+            "Training data is too sparse to calibrate probabilities; using raw RandomForest probabilities."
+        )
+        base_clf.fit(X_train, y_train)
+        return base_clf
 
     def _evaluate_classifier(
         self,
-        clf: RandomForestClassifier,
+        clf: RandomForestClassifier | CalibratedClassifierCV,
         X_test: np.ndarray,
         y_test: np.ndarray,
         folders: List[str],
@@ -146,7 +184,10 @@ class TrainingManager:
         return accuracy
 
     def _log_training_summary(
-        self, total_embeddings: int, accuracy: float, clf: RandomForestClassifier
+        self,
+        total_embeddings: int,
+        accuracy: float,
+        clf: RandomForestClassifier | CalibratedClassifierCV,
     ) -> None:
         self._logger.info("Trained with %i embeddings", total_embeddings)
         self._logger.info("Accuracy: %.2f", accuracy)

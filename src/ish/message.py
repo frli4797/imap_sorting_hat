@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from hashlib import sha256
 import hashlib
 from typing import Optional
 
@@ -14,6 +13,16 @@ class Message:
 
     def preview(self, length: int = 100) -> str:
         return self.body[:length]
+
+    def embedding_text(self) -> str:
+        return "\n".join(
+            [
+                f"From: {self.from_addr or ''}",
+                f"To: {self.to_addr or ''}",
+                f"Subject: {self.subject or ''}",
+                f"Body: {self.body or ''}",
+            ]
+        )
 
     def hash(self) -> str:
         # Generate a short hash based on the message body and all the other fields

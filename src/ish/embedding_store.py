@@ -66,7 +66,7 @@ class EmbeddingStore:
                 if message is None:
                     continue
                 ordered_uids.append(uid)
-                texts.append(message.body[: self._max_chars])
+                texts.append(message.embedding_text()[: self._max_chars])
 
             if texts:
                 embeddings_list = self._batch_embeddings(texts)
