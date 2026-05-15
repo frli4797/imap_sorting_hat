@@ -12,10 +12,16 @@ import pytest
 
 import ish.app as ish_mod
 from ish.db import LEGACY_EMBEDDING_PROFILE, SQLiteCache
-from ish.embedding_store import EMBEDDING_INPUT_PROFILE, EmbeddingStore
+from ish.embedding_store import (
+    EMBEDDING_INPUT_PROFILE,
+    EmbeddingStore,
+    embedding_profile_for_model,
+)
 from ish.app import ISH
 from ish.classification_service import ClassificationService
 from ish.message import Message
+from ish.migrate_shelve_to_sql import _rehash_and_reconcile
+from ish.model_store import make_model_bundle
 from ish.training_manager import TrainingManager
 
 
@@ -425,6 +431,7 @@ def test_training_ignores_cached_embeddings_for_uids_not_in_folder_search():
         model_file="unused.pkl",
         max_learn_messages=100,
         exit_event=Event(),
+        embedding_profile=EMBEDDING_INPUT_PROFILE,
     )
 
     embeddings, labels = manager._collect_training_data(fake_imap, ["FolderA", "FolderB"])
@@ -540,6 +547,132 @@ def test_embedding_store_reuses_active_profile_embedding(tmp_path):
     repository.get_messages.assert_not_called()
 
 
+def test_embedding_profile_includes_openai_model_and_model_change_misses_cache(tmp_path):
+    cache = SQLiteCache(str(tmp_path / "cache.sqlite"))
+    message = Message(
+        uid=1,
+        from_addr="alice@example.com",
+        to_addr="bob@example.com",
+        subject="Travel",
+        body="Boarding pass attached",
+    )
+    msg_hash = cache.store_message("INBOX", 1, message)
+    old_profile = embedding_profile_for_model("text-embedding-old")
+    new_profile = embedding_profile_for_model("text-embedding-new")
+    cache.store_embedding(msg_hash, np.array([1.0]), old_profile)
+
+    repository = mock.MagicMock()
+    repository.get_hashes.return_value = {1: msg_hash}
+    repository.get_messages.return_value = {1: message}
+    embedder = mock.MagicMock(return_value=[np.array([2.0])])
+    store = EmbeddingStore(
+        cache=cache,
+        message_repository=repository,
+        embedder=embedder,
+        max_chars=8192,
+        data_directory=str(tmp_path),
+        embedding_profile=new_profile,
+    )
+
+    embeddings = store.get_embeddings("INBOX", [1])
+
+    assert embeddings[1].tolist() == [2.0]
+    assert cache.get_embedding(msg_hash, old_profile).tolist() == [1.0]
+    assert cache.get_embedding(msg_hash, new_profile).tolist() == [2.0]
+    embedder.assert_called_once_with([message.embedding_text()])
+
+
+def test_training_saves_classifier_with_embedding_profile_metadata(monkeypatch):
+    profile = embedding_profile_for_model("text-embedding-3-small")
+    classifier = object()
+    dump_mock = mock.MagicMock()
+    monkeypatch.setattr(joblib, "dump", dump_mock)
+
+    manager = TrainingManager(
+        imap_conn_provider=lambda: mock.MagicMock(),
+        get_embeddings=lambda folder, uids: {},
+        get_cache_embeddings=lambda folder: {},
+        model_file="model.pkl",
+        max_learn_messages=100,
+        exit_event=Event(),
+        embedding_profile=profile,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_collect_training_data",
+        lambda imap_conn, folders: (
+            [np.array([1.0]), np.array([2.0]), np.array([3.0]), np.array([4.0])],
+            ["A", "A", "B", "B"],
+        ),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_split_training_data",
+        lambda X, y: (X[:2], X[2:], y[:2], y[2:]),
+    )
+    monkeypatch.setattr(manager, "_train_classifier", lambda X_train, y_train: classifier)
+    monkeypatch.setattr(manager, "_evaluate_classifier", lambda clf, X_test, y_test, folders: 0.5)
+
+    assert manager.learn_folders(["A", "B"]) is classifier
+    payload, model_file = dump_mock.call_args.args
+
+    assert model_file == "model.pkl"
+    assert payload == make_model_bundle(classifier, profile)
+
+
+def test_classification_rejects_model_with_mismatched_embedding_profile(tmp_path):
+    model_file = tmp_path / "model.pkl"
+    joblib.dump(
+        make_model_bundle(object(), embedding_profile_for_model("text-embedding-old")),
+        model_file,
+    )
+    fake_imap = mock.MagicMock()
+    service = ClassificationService(
+        imap_conn_provider=lambda: fake_imap,
+        get_embeddings=mock.MagicMock(return_value={}),
+        get_messages=mock.MagicMock(return_value={}),
+        model_file=str(model_file),
+        max_source_messages=10,
+        interactive=False,
+        dry_run=True,
+        exit_event=Event(),
+        embedding_profile=embedding_profile_for_model("text-embedding-new"),
+    )
+
+    assert service.classify_messages(["INBOX"]) == (0, 0)
+    fake_imap.search.assert_not_called()
+
+
+def test_run_retrains_when_existing_model_has_mismatched_embedding_profile(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    fake_settings = SimpleNamespace(
+        data_directory=str(data_dir),
+        source_folders=["INBOX"],
+        destination_folders=["Important"],
+        ignore_folders=[],
+        openai_api_key="key",
+        openai_model="text-embedding-new",
+        classification_probability_threshold=0.55,
+        classification_runner_up_gap_threshold=0.15,
+    )
+    fake_settings.update_data_settings = lambda: None
+    monkeypatch.setattr(ish_mod, "Settings", lambda debug=False: fake_settings)
+
+    ish = ISH(dry_run=True)
+    joblib.dump(
+        make_model_bundle(object(), embedding_profile_for_model("text-embedding-old")),
+        ish.model_file,
+    )
+    monkeypatch.setattr(ish, "connect", lambda: True)
+    train_mock = mock.MagicMock(return_value=True)
+    monkeypatch.setattr(ish, "train_on_destination_folders", train_mock)
+    monkeypatch.setattr(ish, "classify_messages", lambda source_folders: None)
+
+    assert ish.run() == 0
+    train_mock.assert_called_once_with()
+
+
 def test_sqlite_cache_migrates_legacy_embedding_schema_with_profile_and_timestamps(tmp_path):
     db_path = tmp_path / "cache.sqlite"
     conn = sqlite3.connect(db_path)
@@ -592,3 +725,54 @@ def test_sqlite_cache_migrates_legacy_embedding_schema_with_profile_and_timestam
     assert updated_at
     assert cache.get_embedding(msg_hash, EMBEDDING_INPUT_PROFILE) is None
     assert cache.get_embedding(msg_hash, LEGACY_EMBEDDING_PROFILE).tolist() == [1.0]
+
+
+def test_rehash_preserves_embedding_profile_and_timestamps(tmp_path):
+    cache = SQLiteCache(str(tmp_path / "cache.sqlite"))
+    conn = cache.conn
+    message = Message(uid=1, from_addr="a", to_addr="b", subject="s", body="body")
+    old_hash = "legacy-hash"
+    computed_hash = message.hash()
+    created_at = "2024-01-01T00:00:00+00:00"
+    updated_at = "2024-02-01T00:00:00+00:00"
+
+    conn.execute(
+        "INSERT INTO messages_content (msg_hash, from_addr, to_addr, subject, body) VALUES (?, ?, ?, ?, ?)",
+        (old_hash, message.from_addr, message.to_addr, message.subject, message.body),
+    )
+    conn.execute(
+        "INSERT INTO folder_messages (folder, uid, msg_hash) VALUES (?, ?, ?)",
+        ("INBOX", 1, old_hash),
+    )
+    conn.execute(
+        """
+        INSERT INTO embeddings (msg_hash, profile, data, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            old_hash,
+            LEGACY_EMBEDDING_PROFILE,
+            sqlite3.Binary(pickle.dumps(np.array([1.0]))),
+            created_at,
+            updated_at,
+        ),
+    )
+    conn.commit()
+
+    assert _rehash_and_reconcile(conn) == {"updated": 1, "merged": 0, "skipped": 0}
+
+    cur = conn.cursor()
+    cur.execute("SELECT msg_hash FROM folder_messages WHERE folder = ? AND uid = ?", ("INBOX", 1))
+    assert cur.fetchone()[0] == computed_hash
+    cur.execute(
+        "SELECT profile, data, created_at, updated_at FROM embeddings WHERE msg_hash = ?",
+        (computed_hash,),
+    )
+    profile, data, stored_created_at, stored_updated_at = cur.fetchone()
+
+    assert profile == LEGACY_EMBEDDING_PROFILE
+    assert pickle.loads(data).tolist() == [1.0]
+    assert stored_created_at == created_at
+    assert stored_updated_at == updated_at
+    cur.execute("SELECT 1 FROM messages_content WHERE msg_hash = ?", (old_hash,))
+    assert cur.fetchone() is None

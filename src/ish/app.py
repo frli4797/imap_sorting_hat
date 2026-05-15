@@ -33,7 +33,7 @@ from itertools import batched  # Python 3.12+
 
 from . import metrics
 from .classification_service import ClassificationService
-from .embedding_store import EMBEDDING_INPUT_PROFILE, EmbeddingStore
+from .embedding_store import EmbeddingStore, embedding_profile_for_model
 from .imap import ImapHandler
 from .message import Message  # added
 from .settings import Settings
@@ -94,6 +94,7 @@ class ISH:
         self._maybe_migrate_legacy_cache()
         self._cache = SQLiteCache(self._db_file)
         metrics.record_db_size(self._db_file)
+        self._embedding_profile = embedding_profile_for_model(self.__settings.openai_model)
 
         self._message_repository = MessageRepository(
             cache=self._cache,
@@ -104,19 +105,21 @@ class ISH:
             message_repository=self._message_repository,
             embedder=lambda texts: self.__get_embeddings(texts),
             max_chars=EMBED_MAX_CHARS,
-            data_directory=self.__settings.data_directory
+            data_directory=self.__settings.data_directory,
+            embedding_profile=self._embedding_profile,
         )
         self._training_manager = TrainingManager(
             imap_conn_provider=lambda: self.__imap_conn,
             get_embeddings=lambda folder, uids: self.get_embeddings(folder, uids),
             get_cache_embeddings=(
                 lambda folder: self._cache.get_folder_embeddings(
-                    folder, EMBEDDING_INPUT_PROFILE
+                    folder, self._embedding_profile
                 )
             ),
             model_file=self.model_file,
             max_learn_messages=MAX_LEARN_MESSAGES,
-            exit_event=self._exit_event
+            exit_event=self._exit_event,
+            embedding_profile=self._embedding_profile,
         )
         self._classification_service = ClassificationService(
             imap_conn_provider=lambda: self.__imap_conn,
@@ -129,6 +132,7 @@ class ISH:
             exit_event=self._exit_event,
             probability_threshold=self.__settings.classification_probability_threshold,
             runner_up_gap_threshold=self.__settings.classification_runner_up_gap_threshold,
+            embedding_profile=self._embedding_profile,
         )
 
         self.moved = 0
@@ -344,9 +348,9 @@ class ISH:
         if not self.connect():
             return 1
         
-        if not os.path.isfile(self.model_file):
+        if not self._classification_service.has_compatible_classifier():
             self.logger.info(
-                "No classifier at %s. Going to learning folders.",
+                "No compatible classifier at %s. Going to learning folders.",
                 self.model_file,
             )
             if not self.train_on_destination_folders():

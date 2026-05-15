@@ -9,8 +9,10 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
 from . import metrics
+from .embedding_store import EMBEDDING_INPUT_PROFILE
 from .imap import ImapHandler
 from .message import Message
+from .model_store import unpack_model_bundle
 from .settings import (
     DEFAULT_CLASSIFICATION_PROBABILITY_THRESHOLD,
     DEFAULT_CLASSIFICATION_RUNNER_UP_GAP_THRESHOLD,
@@ -36,6 +38,7 @@ class ClassificationService:
         logger: Optional[logging.Logger] = None,
         probability_threshold: float = DEFAULT_CLASSIFICATION_PROBABILITY_THRESHOLD,
         runner_up_gap_threshold: float = DEFAULT_CLASSIFICATION_RUNNER_UP_GAP_THRESHOLD,
+        embedding_profile: str = EMBEDDING_INPUT_PROFILE,
     ) -> None:
         self._imap_conn_provider = imap_conn_provider
         self._get_embeddings = get_embeddings
@@ -47,6 +50,7 @@ class ClassificationService:
         self._exit_event = exit_event
         self._probability_threshold = probability_threshold
         self._runner_up_gap_threshold = runner_up_gap_threshold
+        self._embedding_profile = embedding_profile
         self._logger = logger or logging.getLogger("ish").getChild(self.__class__.__name__)
 
         self._classifier: Optional[RandomForestClassifier] = None
@@ -173,11 +177,21 @@ class ClassificationService:
             return None
 
         try:
-            self._classifier = joblib.load(self._model_file)
+            payload = joblib.load(self._model_file)
         except Exception as exc:
             self._logger.error("Failed to load classifier from %s: %s", self._model_file, exc)
             return None
+
+        classifier, error = unpack_model_bundle(payload, self._embedding_profile)
+        if error:
+            self._logger.error("Failed to load classifier from %s: %s", self._model_file, error)
+            return None
+
+        self._classifier = classifier
         return self._classifier
+
+    def has_compatible_classifier(self) -> bool:
+        return self._ensure_classifier() is not None
 
     def _increment_skipped(self, amount: int = 1) -> None:
         self.skipped += amount

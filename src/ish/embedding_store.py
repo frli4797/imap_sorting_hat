@@ -10,7 +10,14 @@ from ish import metrics
 from .db import SQLiteCache
 from .message_repository import MessageRepository
 
-EMBEDDING_INPUT_PROFILE = "structured-message-v1"
+EMBEDDING_INPUT_FORMAT = "structured-message-v1"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-ada-002"
+EMBEDDING_INPUT_PROFILE = f"{EMBEDDING_INPUT_FORMAT}:{DEFAULT_EMBEDDING_MODEL}"
+
+
+def embedding_profile_for_model(openai_model: str) -> str:
+    model = openai_model or DEFAULT_EMBEDDING_MODEL
+    return f"{EMBEDDING_INPUT_FORMAT}:{model}"
 
 
 class EmbeddingStore:

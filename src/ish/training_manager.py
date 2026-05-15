@@ -13,6 +13,7 @@ from sklearn.model_selection import train_test_split
 
 from . import metrics
 from .imap import ImapHandler
+from .model_store import make_model_bundle
 
 
 class TrainingManager:
@@ -27,6 +28,7 @@ class TrainingManager:
         model_file: str,
         max_learn_messages: int,
         exit_event: Event,
+        embedding_profile: str,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._imap_conn_provider = imap_conn_provider
@@ -35,6 +37,7 @@ class TrainingManager:
         self._model_file = model_file
         self._max_learn_messages = max_learn_messages
         self._exit_event = exit_event
+        self._embedding_profile = embedding_profile
         self._logger = logger or logging.getLogger("ish").getChild(self.__class__.__name__)
 
     def learn_folders(self, folders: List[str]) -> Optional[RandomForestClassifier | CalibratedClassifierCV]:
@@ -65,7 +68,7 @@ class TrainingManager:
         duration = eval_end - fetch_end
         metrics.record_training_stats(len(embed_array), accuracy, duration)
 
-        joblib.dump(clf, self._model_file)
+        joblib.dump(make_model_bundle(clf, self._embedding_profile), self._model_file)
         self._logger.info("Saved classifier.")
         return clf
 
