@@ -1,11 +1,14 @@
 import os
 import pickle
 import sqlite3
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import numpy as np
 
 from .message import Message
+
+LEGACY_EMBEDDING_PROFILE = "legacy-body-v1"
 
 
 class SQLiteCache:
@@ -36,13 +39,50 @@ class SQLiteCache:
                 FOREIGN KEY (msg_hash) REFERENCES messages_content(msg_hash) ON DELETE CASCADE
             );
             CREATE TABLE IF NOT EXISTS embeddings (
-                msg_hash TEXT PRIMARY KEY,
+                msg_hash TEXT,
+                profile TEXT NOT NULL DEFAULT 'legacy-body-v1',
                 data BLOB,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (msg_hash, profile),
                 FOREIGN KEY (msg_hash) REFERENCES messages_content(msg_hash) ON DELETE CASCADE
             );
             """
         )
+        self._migrate_embedding_schema()
         self.conn.commit()
+
+    def _migrate_embedding_schema(self):
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(embeddings)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "profile" not in columns:
+            cur.executescript(
+                f"""
+                ALTER TABLE embeddings RENAME TO embeddings_legacy;
+                CREATE TABLE embeddings (
+                    msg_hash TEXT,
+                    profile TEXT NOT NULL DEFAULT '{LEGACY_EMBEDDING_PROFILE}',
+                    data BLOB,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (msg_hash, profile),
+                    FOREIGN KEY (msg_hash) REFERENCES messages_content(msg_hash) ON DELETE CASCADE
+                );
+                INSERT INTO embeddings (msg_hash, profile, data, created_at, updated_at)
+                SELECT msg_hash, '{LEGACY_EMBEDDING_PROFILE}', data, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                FROM embeddings_legacy;
+                DROP TABLE embeddings_legacy;
+                """
+            )
+            return
+
+        for column in ("created_at", "updated_at"):
+            if column not in columns:
+                cur.execute(f"ALTER TABLE embeddings ADD COLUMN {column} TEXT")
+                cur.execute(
+                    f"UPDATE embeddings SET {column} = CURRENT_TIMESTAMP WHERE {column} IS NULL"
+                )
 
     def close(self):
         try:
@@ -115,25 +155,45 @@ class SQLiteCache:
 
     # Embeddings
 
-    def get_embedding(self, msg_hash: str) -> Optional[np.ndarray]:
+    @staticmethod
+    def _timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def get_embedding(
+        self, msg_hash: str, profile: str = LEGACY_EMBEDDING_PROFILE
+    ) -> Optional[np.ndarray]:
         cur = self.conn.cursor()
-        cur.execute("SELECT data FROM embeddings WHERE msg_hash = ? LIMIT 1", (msg_hash,))
+        cur.execute(
+            "SELECT data FROM embeddings WHERE msg_hash = ? AND profile = ? LIMIT 1",
+            (msg_hash, profile),
+        )
         r = cur.fetchone()
         if not r:
             return None
         data = r[0]
         return pickle.loads(data)
 
-    def store_embedding(self, msg_hash: str, emb: np.ndarray):
+    def store_embedding(
+        self, msg_hash: str, emb: np.ndarray, profile: str = LEGACY_EMBEDDING_PROFILE
+    ):
         cur = self.conn.cursor()
         pickled = pickle.dumps(emb, protocol=pickle.HIGHEST_PROTOCOL)
+        timestamp = self._timestamp()
         cur.execute(
-            "INSERT OR REPLACE INTO embeddings (msg_hash, data) VALUES (?, ?)",
-            (msg_hash, sqlite3.Binary(pickled)),
+            """
+            INSERT INTO embeddings (msg_hash, profile, data, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(msg_hash, profile) DO UPDATE SET
+                data = excluded.data,
+                updated_at = excluded.updated_at
+            """,
+            (msg_hash, profile, sqlite3.Binary(pickled), timestamp, timestamp),
         )
         self.conn.commit()
 
-    def get_folder_embeddings(self, folder: str) -> Dict[int, np.ndarray]:
+    def get_folder_embeddings(
+        self, folder: str, profile: str = LEGACY_EMBEDDING_PROFILE
+    ) -> Dict[int, np.ndarray]:
         """Return all cached embeddings for a folder keyed by UID."""
         cur = self.conn.cursor()
         cur.execute(
@@ -141,9 +201,9 @@ class SQLiteCache:
             SELECT fm.uid, e.data
             FROM folder_messages fm
             JOIN embeddings e ON fm.msg_hash = e.msg_hash
-            WHERE fm.folder = ?
+            WHERE fm.folder = ? AND e.profile = ?
             """,
-            (folder,),
+            (folder, profile),
         )
         out: Dict[int, np.ndarray] = {}
         for uid, data in cur.fetchall():

@@ -33,7 +33,7 @@ from itertools import batched  # Python 3.12+
 
 from . import metrics
 from .classification_service import ClassificationService
-from .embedding_store import EmbeddingStore
+from .embedding_store import EMBEDDING_INPUT_PROFILE, EmbeddingStore
 from .imap import ImapHandler
 from .message import Message  # added
 from .settings import Settings
@@ -109,7 +109,11 @@ class ISH:
         self._training_manager = TrainingManager(
             imap_conn_provider=lambda: self.__imap_conn,
             get_embeddings=lambda folder, uids: self.get_embeddings(folder, uids),
-            get_cache_embeddings=self._cache.get_folder_embeddings,
+            get_cache_embeddings=(
+                lambda folder: self._cache.get_folder_embeddings(
+                    folder, EMBEDDING_INPUT_PROFILE
+                )
+            ),
             model_file=self.model_file,
             max_learn_messages=MAX_LEARN_MESSAGES,
             exit_event=self._exit_event

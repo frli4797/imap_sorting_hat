@@ -25,7 +25,7 @@ from typing import Optional
 import numpy as np
 
 from .settings import Settings
-from .db import SQLiteCache
+from .db import LEGACY_EMBEDDING_PROFILE, SQLiteCache
 from .message import Message
 
 logger = logging.getLogger("ish.migrate")
@@ -70,8 +70,11 @@ def _insert_embedding_preserve_hash(conn: sqlite3.Connection, msg_hash: str, emb
     cur = conn.cursor()
     pickled = pickle.dumps(emb, protocol=pickle.HIGHEST_PROTOCOL)
     cur.execute(
-        "INSERT OR REPLACE INTO embeddings (msg_hash, data) VALUES (?, ?)",
-        (msg_hash, sqlite3.Binary(pickled)),
+        """
+        INSERT OR REPLACE INTO embeddings (msg_hash, profile, data)
+        VALUES (?, ?, ?)
+        """,
+        (msg_hash, LEGACY_EMBEDDING_PROFILE, sqlite3.Binary(pickled)),
     )
 
 
@@ -108,14 +111,21 @@ def _rehash_and_reconcile(conn: sqlite3.Connection) -> dict:
             if computed_exists:
                 # move folder_messages
                 cur.execute("UPDATE folder_messages SET msg_hash = ? WHERE msg_hash = ?", (computed, old_hash))
-                # move embedding only if computed doesn't have embedding
-                cur.execute("SELECT data FROM embeddings WHERE msg_hash = ? LIMIT 1", (old_hash,))
-                emb_old = cur.fetchone()
-                cur.execute("SELECT 1 FROM embeddings WHERE msg_hash = ? LIMIT 1", (computed,))
-                emb_new_exists = cur.fetchone() is not None
-                if emb_old and not emb_new_exists:
-                    cur.execute("INSERT OR REPLACE INTO embeddings (msg_hash, data) VALUES (?, ?)", (computed, emb_old[0]))
-                    cur.execute("DELETE FROM embeddings WHERE msg_hash = ?", (old_hash,))
+                # move legacy embeddings while preserving their profile
+                cur.execute(
+                    "SELECT profile, data, created_at, updated_at FROM embeddings WHERE msg_hash = ?",
+                    (old_hash,),
+                )
+                for profile, data, created_at, updated_at in cur.fetchall():
+                    cur.execute(
+                        """
+                        INSERT OR IGNORE INTO embeddings
+                            (msg_hash, profile, data, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (computed, profile, data, created_at, updated_at),
+                    )
+                cur.execute("DELETE FROM embeddings WHERE msg_hash = ?", (old_hash,))
                 # delete old content
                 cur.execute("DELETE FROM messages_content WHERE msg_hash = ?", (old_hash,))
                 merged += 1
@@ -127,11 +137,20 @@ def _rehash_and_reconcile(conn: sqlite3.Connection) -> dict:
                 )
                 # move folder_messages and embedding
                 cur.execute("UPDATE folder_messages SET msg_hash = ? WHERE msg_hash = ?", (computed, old_hash))
-                cur.execute("SELECT data FROM embeddings WHERE msg_hash = ? LIMIT 1", (old_hash,))
-                emb_old = cur.fetchone()
-                if emb_old:
-                    cur.execute("INSERT OR REPLACE INTO embeddings (msg_hash, data) VALUES (?, ?)", (computed, emb_old[0]))
-                    cur.execute("DELETE FROM embeddings WHERE msg_hash = ?", (old_hash,))
+                cur.execute(
+                    "SELECT profile, data, created_at, updated_at FROM embeddings WHERE msg_hash = ?",
+                    (old_hash,),
+                )
+                for profile, data, created_at, updated_at in cur.fetchall():
+                    cur.execute(
+                        """
+                        INSERT OR REPLACE INTO embeddings
+                            (msg_hash, profile, data, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (computed, profile, data, created_at, updated_at),
+                    )
+                cur.execute("DELETE FROM embeddings WHERE msg_hash = ?", (old_hash,))
                 cur.execute("DELETE FROM messages_content WHERE msg_hash = ?", (old_hash,))
                 updated += 1
 

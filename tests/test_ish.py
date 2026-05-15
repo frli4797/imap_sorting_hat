@@ -1,4 +1,6 @@
 import os
+import pickle
+import sqlite3
 import types
 from threading import Event
 from types import SimpleNamespace
@@ -9,6 +11,8 @@ import numpy as np
 import pytest
 
 import ish.app as ish_mod
+from ish.db import LEGACY_EMBEDDING_PROFILE, SQLiteCache
+from ish.embedding_store import EMBEDDING_INPUT_PROFILE, EmbeddingStore
 from ish.app import ISH
 from ish.classification_service import ClassificationService
 from ish.message import Message
@@ -387,7 +391,11 @@ def test_learn_folders_uses_cached_embeddings(monkeypatch, tmp_path):
             uid = folder_idx * 10 + sample_idx
             msg = Message(uid=uid, from_addr="a", to_addr="b", subject="s", body=f"body-{folder_idx}-{sample_idx}")
             msg_hash = ish._cache.store_message(folder, uid, msg)
-            ish._cache.store_embedding(msg_hash, np.array([float(uid), float(sample_idx)]))
+            ish._cache.store_embedding(
+                msg_hash,
+                np.array([float(uid), float(sample_idx)]),
+                EMBEDDING_INPUT_PROFILE,
+            )
 
     clf = ish.learn_folders(folders)
     assert clf is not None
@@ -468,3 +476,119 @@ def test_classification_sorts_source_uids_newest_first():
     service.classify_messages(["INBOX"])
 
     service._get_embeddings.assert_called_once_with("INBOX", [3, 2])
+
+
+def test_embedding_store_ignores_legacy_profile_and_regenerates_active_embedding(tmp_path):
+    cache = SQLiteCache(str(tmp_path / "cache.sqlite"))
+    message = Message(
+        uid=1,
+        from_addr="alice@example.com",
+        to_addr="bob@example.com",
+        subject="Travel",
+        body="Boarding pass attached",
+    )
+    msg_hash = cache.store_message("INBOX", 1, message)
+    cache.store_embedding(msg_hash, np.array([1.0]), LEGACY_EMBEDDING_PROFILE)
+
+    repository = mock.MagicMock()
+    repository.get_hashes.return_value = {1: msg_hash}
+    repository.get_messages.return_value = {1: message}
+    embedder = mock.MagicMock(return_value=[np.array([2.0])])
+    store = EmbeddingStore(
+        cache=cache,
+        message_repository=repository,
+        embedder=embedder,
+        max_chars=8192,
+        data_directory=str(tmp_path),
+    )
+
+    embeddings = store.get_embeddings("INBOX", [1])
+
+    assert embeddings[1].tolist() == [2.0]
+    assert cache.get_embedding(msg_hash, LEGACY_EMBEDDING_PROFILE).tolist() == [1.0]
+    assert cache.get_embedding(msg_hash, EMBEDDING_INPUT_PROFILE).tolist() == [2.0]
+    embedder.assert_called_once_with([message.embedding_text()])
+
+
+def test_embedding_store_reuses_active_profile_embedding(tmp_path):
+    cache = SQLiteCache(str(tmp_path / "cache.sqlite"))
+    message = Message(
+        uid=1,
+        from_addr="alice@example.com",
+        to_addr="bob@example.com",
+        subject="Travel",
+        body="Boarding pass attached",
+    )
+    msg_hash = cache.store_message("INBOX", 1, message)
+    cache.store_embedding(msg_hash, np.array([3.0]), EMBEDDING_INPUT_PROFILE)
+
+    repository = mock.MagicMock()
+    repository.get_hashes.return_value = {1: msg_hash}
+    embedder = mock.MagicMock()
+    store = EmbeddingStore(
+        cache=cache,
+        message_repository=repository,
+        embedder=embedder,
+        max_chars=8192,
+        data_directory=str(tmp_path),
+    )
+
+    embeddings = store.get_embeddings("INBOX", [1])
+
+    assert embeddings[1].tolist() == [3.0]
+    embedder.assert_not_called()
+    repository.get_messages.assert_not_called()
+
+
+def test_sqlite_cache_migrates_legacy_embedding_schema_with_profile_and_timestamps(tmp_path):
+    db_path = tmp_path / "cache.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE messages_content (
+            msg_hash TEXT PRIMARY KEY,
+            from_addr TEXT,
+            to_addr TEXT,
+            subject TEXT,
+            body TEXT
+        );
+        CREATE TABLE folder_messages (
+            folder TEXT,
+            uid INTEGER,
+            msg_hash TEXT,
+            PRIMARY KEY (folder, uid),
+            FOREIGN KEY (msg_hash) REFERENCES messages_content(msg_hash) ON DELETE CASCADE
+        );
+        CREATE TABLE embeddings (
+            msg_hash TEXT PRIMARY KEY,
+            data BLOB,
+            FOREIGN KEY (msg_hash) REFERENCES messages_content(msg_hash) ON DELETE CASCADE
+        );
+        """
+    )
+    message = Message(uid=1, from_addr="a", to_addr="b", subject="s", body="body")
+    msg_hash = message.hash()
+    conn.execute(
+        "INSERT INTO messages_content (msg_hash, from_addr, to_addr, subject, body) VALUES (?, ?, ?, ?, ?)",
+        (msg_hash, message.from_addr, message.to_addr, message.subject, message.body),
+    )
+    conn.execute(
+        "INSERT INTO embeddings (msg_hash, data) VALUES (?, ?)",
+        (msg_hash, sqlite3.Binary(pickle.dumps(np.array([1.0])))),
+    )
+    conn.commit()
+    conn.close()
+
+    cache = SQLiteCache(str(db_path))
+    cur = cache.conn.cursor()
+    cur.execute("PRAGMA table_info(embeddings)")
+    columns = {row[1] for row in cur.fetchall()}
+    cur.execute("SELECT profile, created_at, updated_at FROM embeddings WHERE msg_hash = ?", (msg_hash,))
+    profile, created_at, updated_at = cur.fetchone()
+
+    assert {"msg_hash", "profile", "data", "created_at", "updated_at"}.issubset(columns)
+    assert profile == LEGACY_EMBEDDING_PROFILE
+    assert created_at
+    assert updated_at
+    assert cache.get_embedding(msg_hash, EMBEDDING_INPUT_PROFILE) is None
+    assert cache.get_embedding(msg_hash, LEGACY_EMBEDDING_PROFILE).tolist() == [1.0]

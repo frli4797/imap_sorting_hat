@@ -10,6 +10,8 @@ from ish import metrics
 from .db import SQLiteCache
 from .message_repository import MessageRepository
 
+EMBEDDING_INPUT_PROFILE = "structured-message-v1"
+
 
 class EmbeddingStore:
     """Manage cached embeddings and fetch new ones via embedder callback."""
@@ -22,6 +24,7 @@ class EmbeddingStore:
         embedder: Callable[[List[str]], List[np.ndarray]],
         max_chars: int,
         data_directory: str,
+        embedding_profile: str = EMBEDDING_INPUT_PROFILE,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._cache = cache
@@ -29,6 +32,7 @@ class EmbeddingStore:
         self._embedder = embedder
         self._max_chars = max_chars
         self._data_directory = data_directory
+        self._embedding_profile = embedding_profile
         self._logger = logger or logging.getLogger("ish").getChild(self.__class__.__name__)
 
     def get_embeddings(self, folder: str, uids: List[int]) -> Dict[int, np.ndarray]:
@@ -50,7 +54,7 @@ class EmbeddingStore:
         missing: List[int] = []
 
         for uid, msg_hash in hash_map.items():
-            embd = self._cache.get_embedding(msg_hash)
+            embd = self._cache.get_embedding(msg_hash, self._embedding_profile)
             if embd is not None:
                 embeddings[uid] = embd
             else:
@@ -78,7 +82,7 @@ class EmbeddingStore:
                     if msg_hash is None:
                         msg_hash = self._cache.store_message(folder, uid, message)
                         hash_map[uid] = msg_hash
-                    self._cache.store_embedding(msg_hash, emb)
+                    self._cache.store_embedding(msg_hash, emb, self._embedding_profile)
                     embeddings[uid] = emb
 
         self._logger.debug("Total embeddings found/added %i in %s.", len(embeddings), folder)
