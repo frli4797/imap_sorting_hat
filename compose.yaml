@@ -1,0 +1,27 @@
+services:
+  ish:
+    build:
+      context: .
+      target: dev
+    image: ish-dev
+    working_dir: /app
+    environment:
+      ISH_CONFIG_PATH: /config
+      PYTHONPATH: /app/src
+    volumes:
+      - .:/app
+      - ./.ish-dev:/config
+    command: ["python", "-m", "ish.app", "--dry-run"]
+
+  test:
+    build:
+      context: .
+      target: dev
+    image: ish-dev
+    working_dir: /app
+    environment:
+      ISH_CONFIG_PATH: /tmp/ish-test-config
+      PYTHONPATH: /app/src
+    volumes:
+      - .:/app
+    command: ["pytest", "tests"]

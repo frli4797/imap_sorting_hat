@@ -27,7 +27,29 @@ RUN pip install --upgrade pip && \
     pip install .
 
 # ============================
-# 2. Runtime image
+# 2. Development image
+# ============================
+FROM python:3.13-slim AS dev
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+ENV PYTHONPATH=/app/src
+ENV PYTHONUNBUFFERED=1
+ENV ISH_CONFIG_PATH=/config
+
+CMD ["python", "-m", "ish.app", "--dry-run"]
+
+# ============================
+# 3. Runtime image
 # ============================
 FROM python:3.13-slim
 

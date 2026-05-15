@@ -1,5 +1,8 @@
 /.venv
 .ish/*
+.ish-dev/*
+!.ish-dev/
+!.ish-dev/settings.yaml.example
 
 # -------------------------
 # Python
@@ -82,5 +85,4 @@ docker-compose.local.yml
 # -------------------------
 .env
 .env.*
-
 

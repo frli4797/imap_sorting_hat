@@ -1,0 +1,19 @@
+host: imap.example.com
+username: user@example.com
+password: replace-me
+source_folders:
+- INBOX
+destination_folders:
+- News
+- Notifications
+ignore_folders:
+- Archive
+- Deleted Messages
+- Drafts
+- Sent Messages
+- Junk
+data_directory: /config/data
+openai_api_key: replace-me
+openai_model: text-embedding-3-small
+classification_probability_threshold: 0.55
+classification_runner_up_gap_threshold: 0.15

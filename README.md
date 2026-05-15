@@ -82,6 +82,40 @@ options:
 You can also run **ish** in a Docker container.
 `docker run -it  -v ./.ish:/opt/ish/config -e ISH_DAEMON=True -e ISH_DEBUG=True -e ISH_LEARN=True frli4797/ish`
 
+### Development container
+
+For local development, Docker Compose can run the checkout directly with a mounted config directory. The default command uses `--dry-run`.
+
+Prepare a local config:
+
+```shell
+cp .ish-dev/settings.yaml.example .ish-dev/settings.yaml
+```
+
+Edit `.ish-dev/settings.yaml` with test credentials and folders. The real settings file and `.ish-dev/data` are ignored by git.
+
+Build and run the dry-run app:
+
+```shell
+docker compose run --rm ish
+```
+
+Run tests in the container:
+
+```shell
+docker compose run --rm test
+```
+
+If your Docker install uses the legacy Compose binary, replace `docker compose` with `docker-compose`.
+
+To test a specific runtime command, override the Compose command explicitly:
+
+```shell
+docker compose run --rm ish python -m ish.app --dry-run --learn-folders
+```
+
+Only remove `--dry-run` when you intentionally want to move messages in the configured mailbox.
+
 ## Take care
 
 I leave no guarantees that this will work with your mailprovider, nor that it will work for well for your language. This is an application that I've been tinkering with as I got fed up with sifting through my email and wanted to learn something new. Email might be destroyed, misplaces or lost from using this little tool. Take care. Make backups.  
